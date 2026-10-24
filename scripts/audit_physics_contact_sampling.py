@@ -47,7 +47,8 @@ def main():
         inverse_torque_reference=meta.get('inverse_torque_reference'),
         contact_reward=meta.get('contact_reward', 'additive'),
         contact_group=meta.get('contact_group', []), contact_group_weight=meta.get('contact_group_weight', 0.),
-        contact_force_location=meta.get('contact_force_location', 'body'), record_contact_details=True)
+        contact_force_location=meta.get('contact_force_location', 'body'),
+        contact_reward_sampling=meta.get('contact_reward_sampling', 'control'), record_contact_details=True)
     policy = PPO.load(args.checkpoint, device='cpu')
     def rollout():
         obs, _ = env.reset(seed=0, options={'start_time': args.start_time})
@@ -124,8 +125,10 @@ def main():
         reference_trajectory_sha256=sha(Path(meta['reference'])/'trajectory.npz'),
         start_time_s=args.start_time, requested_horizon_s=args.horizon,
         actual_duration_s=len(samples)*dt, physics_sample_rate_hz=1/dt,
+        contact_reward_sampling=meta.get('contact_reward_sampling', 'control'),
         control_sample_rate_hz=1/env.control_dt, sample_count=len(samples),
-        exact_recording_parity_max_abs_difference=parity, code_sha256=sha(__file__), regions={},
+        exact_recording_parity_max_abs_difference=parity, code_sha256=sha(__file__),
+        env_code_sha256=sha(Path(__file__).resolve().parents[1]/'prism_reconstruction/contact_tracking_env.py'), regions={},
         interpretation='Simulated contact sampled at every physics step, not continuous-time or human ground truth. Physics samples use pre-integration forces/geometry; control samples are the existing post-control metric. No extra forward call or applied force is used.')
     for j, region in enumerate(args.regions):
         active = values[:, j, 0].astype(bool)

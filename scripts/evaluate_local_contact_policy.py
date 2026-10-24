@@ -45,6 +45,7 @@ def main():
     if args.inverse_torque_reference or args.reference_pd:policy_control='reference_pd'
     inverse_path=training_metadata.get('inverse_torque_reference') if args.checkpoint else args.inverse_torque_reference
     force_location=training_metadata.get('contact_force_location','body') if args.checkpoint else 'body'
+    reward_sampling=training_metadata.get('contact_reward_sampling','control') if args.checkpoint else 'control'
     gain_source=args.pd_gain_source or (training_metadata.get('pd_gain_source','local') if args.checkpoint else ('checkpoint' if teacher else 'local'))
     contact_group=training_metadata.get('contact_group',[]) if args.checkpoint else []
     contact_group_weight=training_metadata.get('contact_group_weight',0.) if args.checkpoint else 0.
@@ -52,7 +53,8 @@ def main():
         action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale,
         contact_reward=contact_reward,policy_control=policy_control,pd_gain_source=gain_source,
         contact_group=contact_group,contact_group_weight=contact_group_weight,
-        inverse_torque_reference=inverse_path,record_contact_details=True,contact_force_location=force_location)
+        inverse_torque_reference=inverse_path,record_contact_details=True,contact_force_location=force_location,
+        contact_reward_sampling=reward_sampling)
     policy=None
     if args.checkpoint:
         from stable_baselines3 import PPO
@@ -109,6 +111,7 @@ def main():
             teacher_residual_scale=residual_scale,
             contact_reward=contact_reward,
             contact_force_location=force_location,contact_measurement_rate_hz=1/env.control_dt,
+            contact_reward_sampling=reward_sampling,
             policy_control=policy_control,
             contact_group=contact_group,contact_group_weight=contact_group_weight,
             pd_gain_source=gain_source,pd_gains={key:env.motor[key].tolist() for key in ('kp','kd')},

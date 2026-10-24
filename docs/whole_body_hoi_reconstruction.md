@@ -456,6 +456,18 @@ The default `body` mode preserves earlier experiments. Changing this setting on
 resume is recorded explicitly. It is a smooth training signal, distinct from
 the hard 3 cm/1 N evaluation threshold, and does not itself guarantee success.
 
+Optional `--contact-reward-sampling physics_mean` averages the contact shaping
+terms across all ten physics steps in a control interval. Force guidance is
+clipped at each physics sample before averaging, so a large impulse cannot
+fully replace missing-contact samples. Reference targets use the corresponding
+pre-integration time; no extra forward call or force is added. Tracking rewards
+and observations remain at control rate. The default `control` preserves prior
+experiments, and a change on resume is recorded in metadata. On 90 control steps
+across three start phases, the new default matched the previous code exactly;
+enabling the mean changed rewards while positions, velocities, observations and
+actions remained bitwise identical. This verifies implementation isolation,
+not that the new reward improves a trained policy.
+
 `--temporal-force-solver clarabel_constrained` instead minimizes force variation
 and force magnitude subject to a per-frame normalized wrench residual cap of
 `max(0.08, independent_fit_residual)`. A `1e-6` numerical feasibility allowance is

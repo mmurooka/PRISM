@@ -17,7 +17,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from prism_reconstruction.robot_physics import prepare_physics_scene
 
 
-def make_environment(reference,scene,mode,seed,action_mode,horizon,teacher,residual_scale,contact_reward,policy_control,pd_gain_source,focus_start_range,focus_probability,contact_group,contact_group_weight,inverse_torque_reference,contact_force_location):
+def make_environment(reference,scene,mode,seed,action_mode,horizon,teacher,residual_scale,contact_reward,policy_control,pd_gain_source,focus_start_range,focus_probability,contact_group,contact_group_weight,inverse_torque_reference,contact_force_location,contact_reward_sampling):
     from prism_reconstruction.contact_tracking_env import ContactTrackingEnv
     from stable_baselines3.common.monitor import Monitor
     env=Monitor(ContactTrackingEnv(reference,scene,reward_mode=mode,horizon_s=horizon,random_start=True,
@@ -25,7 +25,8 @@ def make_environment(reference,scene,mode,seed,action_mode,horizon,teacher,resid
         contact_reward=contact_reward,policy_control=policy_control,pd_gain_source=pd_gain_source,
         focus_start_range=focus_start_range,focus_probability=focus_probability,
         contact_group=contact_group,contact_group_weight=contact_group_weight,
-        inverse_torque_reference=inverse_torque_reference,contact_force_location=contact_force_location))
+        inverse_torque_reference=inverse_torque_reference,contact_force_location=contact_force_location,
+        contact_reward_sampling=contact_reward_sampling))
     env.reset(seed=seed)
     return env
 
@@ -47,6 +48,7 @@ def main():
     parser.add_argument('--teacher-residual-scale',type=float,default=1.)
     parser.add_argument('--contact-reward',choices=('additive','coupled'),default='coupled')
     parser.add_argument('--contact-force-location',choices=('body','object_patch'),default='body')
+    parser.add_argument('--contact-reward-sampling',choices=('control','physics_mean'),default='control')
     parser.add_argument('--policy-control',choices=('residual','teacher_absolute','reference_pd'),default='residual')
     parser.add_argument('--inverse-torque-reference',type=Path,help='Matching per-frame inverse-audit motor torques for reference_pd')
     parser.add_argument('--pd-gain-source',choices=('auto','local','checkpoint'),default='auto')
@@ -82,7 +84,7 @@ def main():
     teacher=str(args.teacher_checkpoint.resolve()) if args.teacher_checkpoint else None
     gain_source=('checkpoint' if teacher else 'local') if args.pd_gain_source=='auto' else args.pd_gain_source
     inverse_path=str(args.inverse_torque_reference.resolve()) if args.inverse_torque_reference else None
-    factories=[functools.partial(make_environment,str(args.reference.resolve()),str(scene.resolve()),args.reward_mode,args.seed+i,args.action_mode,args.horizon,teacher,args.teacher_residual_scale,args.contact_reward,args.policy_control,gain_source,args.focus_start_range,args.focus_probability,args.contact_group,args.contact_group_weight,inverse_path,args.contact_force_location)
+    factories=[functools.partial(make_environment,str(args.reference.resolve()),str(scene.resolve()),args.reward_mode,args.seed+i,args.action_mode,args.horizon,teacher,args.teacher_residual_scale,args.contact_reward,args.policy_control,gain_source,args.focus_start_range,args.focus_probability,args.contact_group,args.contact_group_weight,inverse_path,args.contact_force_location,args.contact_reward_sampling)
                for i in range(args.envs)]
     vector=SubprocVecEnv(factories,start_method='forkserver')
     logger=configure(str(args.output),['stdout','csv'])
@@ -125,6 +127,10 @@ def main():
         teacher_residual_scale=args.teacher_residual_scale,
         contact_reward=args.contact_reward,
         contact_force_location=args.contact_force_location,
+        contact_reward_sampling=args.contact_reward_sampling,
+        contact_reward_sampling_changed_on_resume=bool(args.resume and source_meta.get('contact_reward_sampling','control')!=args.contact_reward_sampling),
+        contact_reward_sampling_description=('Mean of contact shaping evaluated at every pre-integration physics state; force guidance is clipped before averaging. Tracking terms remain at control rate.'
+            if args.contact_reward_sampling=='physics_mean' else 'Contact shaping evaluated after each control step, preserving earlier experiments.'),
         contact_force_location_changed_on_resume=bool(args.resume and source_meta.get('contact_force_location','body')!=args.contact_force_location),
         policy_control=args.policy_control,
         inverse_torque_reference=inverse_path,

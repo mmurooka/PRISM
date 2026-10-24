@@ -53,7 +53,8 @@ class ContactTrackingEnv(gym.Env):
                  randomize=False,action_mode='joint_offset',teacher_checkpoint=None,teacher_residual_scale=1.,
                  contact_reward='additive',policy_control='residual',pd_gain_source='local',
                  focus_start_range=None,focus_probability=0.,contact_group=(),contact_group_weight=0.,
-                 inverse_torque_reference=None,record_contact_details=False,contact_force_location='body'):
+                 inverse_torque_reference=None,record_contact_details=False,contact_force_location='body',
+                 contact_reward_sampling='control'):
         if reward_mode not in ('whole_body','hands_only'):raise ValueError('Unknown reward variant')
         if contact_reward not in ('additive','coupled'):raise ValueError('Unknown contact reward recipe')
         self.contact_reward=contact_reward
@@ -62,6 +63,8 @@ class ContactTrackingEnv(gym.Env):
         self.record_contact_details=bool(record_contact_details)
         if contact_force_location not in ('body','object_patch'):raise ValueError('Unknown contact-force location mode')
         self.contact_force_location=contact_force_location
+        if contact_reward_sampling not in ('control','physics_mean'):raise ValueError('Unknown contact reward sampling mode')
+        self.contact_reward_sampling=contact_reward_sampling
         if inverse_torque_reference and policy_control!='reference_pd':raise ValueError('Inverse torques require reference-PD control')
         if pd_gain_source not in ('local','checkpoint'):raise ValueError('Unknown PD gain source')
         self.pd_gain_source=pd_gain_source
@@ -141,6 +144,33 @@ class ContactTrackingEnv(gym.Env):
         box=d.xpos[self.box]+d.xmat[self.box].reshape(3,3)@target['point_object']
         return robot,box
 
+    def _contact_reward_sample(self,time):
+        """Read contact shaping at the derived state's time without a forward call."""
+        _,_,index=self._reference(time);targets=self._targets(index)
+        if not targets:return np.array([1.,1.,1.,0.])
+        m,d=self.model,self.data;forces={};contacts=[]
+        for i in range(d.ncon):
+            contact=d.contact[i]
+            first,second=[int(m.geom_bodyid[g]) for g in (contact.geom1,contact.geom2)]
+            if self.box not in (first,second):continue
+            other=second if first==self.box else first
+            if other==0:continue
+            vector=np.zeros(6);mujoco.mj_contactForce(m,d,i,vector)
+            normal=max(0.,float(vector[0]));weld=int(m.body_weldid[other])
+            forces[weld]=forces.get(weld,0.)+normal
+            if self.contact_force_location=='object_patch':
+                contacts.append(dict(other_weld=weld,normal_force_n=normal,
+                    point_object=(contact.pos-d.xpos[self.box])@d.xmat[self.box].reshape(3,3)))
+        errors=[];normal_forces=[];weights=[]
+        for target in targets:
+            robot,box=self._contact_positions(target);errors.append(float(np.linalg.norm(robot-box)))
+            weights.append(target['weight']);weld=int(m.body_weldid[target['robot_body_id']])
+            normal_forces.append(contact_patch_forces(contacts,weld,np.asarray(target['point_object']))[0]
+                if self.contact_force_location=='object_patch' else forces.get(weld,0.))
+        position,guidance,presence=contact_reward_terms(errors,normal_forces,weights,self.contact_reward)
+        group,_=emphasized_contact_group(errors,normal_forces,[t['region'] for t in targets],self.contact_group)
+        return np.array([position,guidance,presence,group])
+
     def _observation(self):
         m,d=self.model,self.data;phase=self.start_time+self.elapsed
         q,v,index=self._reference(phase);delta=np.zeros(m.nv)
@@ -197,10 +227,15 @@ class ContactTrackingEnv(gym.Env):
         else:
             desired=(self.teacher.desired_positions(self,self.teacher_residual_scale*action) if self.teacher is not None
                      else q[self.qadr]+self.action_scale*action)
-        for _ in range(self.substeps):
+        contact_samples=[]
+        for substep in range(self.substeps):
             torque=self.motor['kp']*(desired-d.qpos[self.qadr])-self.motor['kd']*d.qvel[self.vadr]
             d.ctrl[:]=np.clip(torque,self.motor['lower'],self.motor['upper'])
             mujoco.mj_step(m,d)
+            if self.contact_reward_sampling=='physics_mean':
+                # mj_step's derived positions/forces describe the state before
+                # integration, whereas qpos/time have already advanced.
+                contact_samples.append(self._contact_reward_sample(phase+substep*m.opt.timestep))
         self.elapsed+=self.control_dt;mujoco.mj_forward(m,d)
         q,_,index=self._reference(self.start_time+self.elapsed)
         difference=np.zeros(m.nv);mujoco.mj_differentiatePos(m,difference,1.,d.qpos,q)
@@ -256,6 +291,13 @@ class ContactTrackingEnv(gym.Env):
                        else .25*contact_position+.5*contact_term)
         group_reward,group_active=emphasized_contact_group(errors,normal_forces,[target['region'] for target in targets],self.contact_group)
         contact_bonus+=self.contact_group_weight*group_reward
+        physics_contact_means=None
+        if contact_samples:
+            means=np.mean(contact_samples,axis=0)
+            contact_bonus=(.15*means[0]+.1*means[1] if self.contact_reward=='additive'
+                           else .25*means[0]+.5*means[1])+self.contact_group_weight*means[3]
+            physics_contact_means=dict(approach=float(means[0]),force_guidance=float(means[1]),
+                force_presence=float(means[2]),emphasized_group=float(means[3]))
         reward=.25*posture+.2*root+.3*object_tracking+contact_bonus+.1
         reward-=.01*effort+.01*action_rate+.03*unwanted
         tilt=float(d.xmat[1].reshape(3,3)[2,2])
@@ -280,4 +322,5 @@ class ContactTrackingEnv(gym.Env):
             terminated_by_tracking_failure=bool(terminated))
         if self.record_contact_details:info.update(object_contacts=object_contacts,
             region_patch_contact_force_n=region_patch_forces,region_contact_point_distance_m=region_contact_distances)
+        if physics_contact_means is not None:info['physics_contact_reward_means']=physics_contact_means
         return self._observation(),float(reward),bool(terminated),bool(truncated),info
