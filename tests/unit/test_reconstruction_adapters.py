@@ -5,9 +5,21 @@ import unittest
 import numpy as np
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 from prism_reconstruction.adapters import assemble_input,load_interactvlm_contacts
+from prism_reconstruction.scene_support import fit_support_plane
 
 
 class AdapterTests(unittest.TestCase):
+    def test_floor_fit_with_outliers_and_camera_side_orientation(self):
+        rng=np.random.default_rng(0)
+        points=np.c_[rng.uniform(-2,2,(500,2)),rng.normal(0,.002,500)]
+        points[:50,2]=1
+        result=fit_support_plane(points,[0,0,1.5])
+        self.assertGreater(result['inlier_fraction'],.85)
+        self.assertGreater(result['normal_world'][2],.999)
+        self.assertLess(abs(result['offset_m']),.005)
+        with self.assertRaises(ValueError):
+            fit_support_plane(np.c_[np.arange(500),np.zeros((500,2))],[0,0,1])
+
     def fixture(self):
         vertices=np.zeros((3,6890,3))
         weights=np.zeros((6890,24)); weights[:,0]=1
