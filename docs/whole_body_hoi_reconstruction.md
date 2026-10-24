@@ -259,6 +259,11 @@ remains available for previous checkpoints and controlled comparisons. This is
 our whole-body extension, not a literal reproduction of the paper's soft force
 gate. Evaluate force and position jointly per region; aggregate reward alone
 does not establish knee-contact retention.
+The coupled recipe also uses per-joint mean exponential tracking and broader
+root/object distance kernels. This avoids losing the entire posture signal when
+a few wrist joints start far from the reference. Comparisons to the legacy
+recipe therefore change the shaping package, not only one reward coefficient;
+hand-only versus whole-body comparisons within a recipe remain matched.
 
 `scripts/audit_robot_contact_dynamics.py` computes required generalized forces
 from the reference accelerations, mass matrix, bias and passive forces. It fits

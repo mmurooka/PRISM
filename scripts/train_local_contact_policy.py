@@ -86,6 +86,9 @@ def main():
         teacher_checkpoint=teacher,
         teacher_residual_scale=args.teacher_residual_scale,
         contact_reward=args.contact_reward,
+        contact_reward_description=('Per-joint mean exponential tracking; linear-distance root/object shaping; '
+            '0.25 approach + 0.5 position-times-normal-force contact guidance.' if args.contact_reward=='coupled'
+            else 'Legacy narrow squared-error tracking with independent position and force-presence bonuses.'),
         teacher_checkpoint_sha256=hashlib.sha256(args.teacher_checkpoint.read_bytes()).hexdigest() if teacher else None,
         initial_residual_mean='zero' if teacher and not args.resume else 'default_or_resumed',
         initialization_checkpoint=str(args.resume.resolve()) if args.resume else None,
@@ -112,6 +115,12 @@ def main():
         metadata.update(actual_steps=int(policy.num_timesteps),new_steps=int(policy.num_timesteps)-metadata['initial_timesteps'],
                         elapsed_s=time.time()-started,complete=True)
         (args.output/'metadata.json').write_text(json.dumps(metadata,indent=2))
+    except KeyboardInterrupt:
+        policy.save(args.output/'interrupted_policy.zip')
+        metadata.update(actual_steps=int(policy.num_timesteps),new_steps=int(policy.num_timesteps)-metadata['initial_timesteps'],
+                        elapsed_s=time.time()-started,complete=False,interrupted=True)
+        (args.output/'metadata.json').write_text(json.dumps(metadata,indent=2))
+        raise
     finally:vector.close()
 
 

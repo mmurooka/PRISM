@@ -154,6 +154,13 @@ class ContactTrackingEnv(gym.Env):
         posture=np.exp(-np.mean(difference[self.vadr]**2)/.2**2)
         root=np.exp(-root_error**2/.15**2-np.linalg.norm(difference[3:6])**2/.5**2)
         object_tracking=np.exp(-object_error**2/.12**2-np.linalg.norm(difference[self.box_v+3:])**2/.5**2)
+        if self.contact_reward=='coupled':
+            # A few out-of-distribution wrist joints must not erase the reward
+            # for all remaining joints. Broad exponential-distance shaping also
+            # keeps an approach signal before precise contact is established.
+            posture=float(np.mean(np.exp(-np.abs(difference[self.vadr])/.3)))
+            root=np.exp(-root_error/.3-np.linalg.norm(difference[3:6])/.4)
+            object_tracking=np.exp(-object_error/.3-np.linalg.norm(difference[self.box_v+3:])/.4)
         forces={};unwanted=0
         for i in range(d.ncon):
             c=d.contact[i];first=int(m.geom_bodyid[c.geom1]);second=int(m.geom_bodyid[c.geom2])
