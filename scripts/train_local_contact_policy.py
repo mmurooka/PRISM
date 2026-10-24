@@ -17,14 +17,15 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from prism_reconstruction.robot_physics import prepare_physics_scene
 
 
-def make_environment(reference,scene,mode,seed,action_mode,horizon,teacher,residual_scale,contact_reward,policy_control,pd_gain_source,focus_start_range,focus_probability,contact_group,contact_group_weight):
+def make_environment(reference,scene,mode,seed,action_mode,horizon,teacher,residual_scale,contact_reward,policy_control,pd_gain_source,focus_start_range,focus_probability,contact_group,contact_group_weight,inverse_torque_reference):
     from prism_reconstruction.contact_tracking_env import ContactTrackingEnv
     from stable_baselines3.common.monitor import Monitor
     env=Monitor(ContactTrackingEnv(reference,scene,reward_mode=mode,horizon_s=horizon,random_start=True,
         action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale,
         contact_reward=contact_reward,policy_control=policy_control,pd_gain_source=pd_gain_source,
         focus_start_range=focus_start_range,focus_probability=focus_probability,
-        contact_group=contact_group,contact_group_weight=contact_group_weight))
+        contact_group=contact_group,contact_group_weight=contact_group_weight,
+        inverse_torque_reference=inverse_torque_reference))
     env.reset(seed=seed)
     return env
 
@@ -45,7 +46,8 @@ def main():
     parser.add_argument('--teacher-checkpoint',type=Path,help='Optional released PRISM actor under the residual policy')
     parser.add_argument('--teacher-residual-scale',type=float,default=1.)
     parser.add_argument('--contact-reward',choices=('additive','coupled'),default='coupled')
-    parser.add_argument('--policy-control',choices=('residual','teacher_absolute'),default='residual')
+    parser.add_argument('--policy-control',choices=('residual','teacher_absolute','reference_pd'),default='residual')
+    parser.add_argument('--inverse-torque-reference',type=Path,help='Matching per-frame inverse-audit motor torques for reference_pd')
     parser.add_argument('--pd-gain-source',choices=('auto','local','checkpoint'),default='auto')
     parser.add_argument('--robot-urdf',type=Path,help='Optional pinned source for inertial groups and effort limits')
     parser.add_argument('--focus-start-range',nargs=2,type=float,metavar=('FIRST','LAST'))
@@ -58,11 +60,13 @@ def main():
     if not math.isfinite(args.teacher_residual_scale) or args.teacher_residual_scale<=0:raise ValueError('Positive residual scale required')
     if args.policy_control=='teacher_absolute' and (not args.teacher_checkpoint or args.teacher_residual_scale!=1.):
         raise ValueError('Teacher fine-tuning requires its checkpoint and residual scale 1')
+    if args.inverse_torque_reference and args.policy_control!='reference_pd':raise ValueError('Inverse torques require reference_pd')
+    if args.policy_control=='reference_pd' and args.teacher_residual_scale!=1.:raise ValueError('Teacher residual scaling does not apply to reference_pd')
     args.output.mkdir(parents=True)
     source_root=Path(__file__).resolve().parents[1]
     code_names=('prism_reconstruction/contact_tracking_env.py','prism_reconstruction/robot_physics.py',
                 'prism_reconstruction/released_teacher.py','prism_reconstruction/teacher_finetune.py','prism_reconstruction/robot_model_profile.py',
-                'scripts/train_local_contact_policy.py')
+                'prism_reconstruction/reference_control.py','scripts/train_local_contact_policy.py')
     for name in code_names:
         destination=args.output/'code_snapshot'/name;destination.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(source_root/name,destination)
@@ -76,7 +80,8 @@ def main():
     if args.device.startswith('cuda') and not torch.cuda.is_available():raise RuntimeError('CUDA not visible')
     teacher=str(args.teacher_checkpoint.resolve()) if args.teacher_checkpoint else None
     gain_source=('checkpoint' if teacher else 'local') if args.pd_gain_source=='auto' else args.pd_gain_source
-    factories=[functools.partial(make_environment,str(args.reference.resolve()),str(scene.resolve()),args.reward_mode,args.seed+i,args.action_mode,args.horizon,teacher,args.teacher_residual_scale,args.contact_reward,args.policy_control,gain_source,args.focus_start_range,args.focus_probability,args.contact_group,args.contact_group_weight)
+    inverse_path=str(args.inverse_torque_reference.resolve()) if args.inverse_torque_reference else None
+    factories=[functools.partial(make_environment,str(args.reference.resolve()),str(scene.resolve()),args.reward_mode,args.seed+i,args.action_mode,args.horizon,teacher,args.teacher_residual_scale,args.contact_reward,args.policy_control,gain_source,args.focus_start_range,args.focus_probability,args.contact_group,args.contact_group_weight,inverse_path)
                for i in range(args.envs)]
     vector=SubprocVecEnv(factories,start_method='forkserver')
     logger=configure(str(args.output),['stdout','csv'])
@@ -94,7 +99,7 @@ def main():
         policy_kwargs=dict(net_arch=dict(pi=[512,256,128],vf=[512,256,128]) if args.policy_control=='teacher_absolute' else dict(pi=[256,256],vf=[256,256]),
             activation_fn=torch.nn.ELU if args.policy_control=='teacher_absolute' else torch.nn.Tanh,
             log_std_init=-1.-math.log(args.teacher_residual_scale) if teacher else -1.),seed=args.seed,verbose=1)
-    if teacher and not args.resume and args.policy_control=='residual':
+    if not args.resume and ((teacher and args.policy_control=='residual') or args.policy_control=='reference_pd'):
         # Begin at the validated teacher's deterministic action. Exploration is
         # still sampled from PPO's distribution during training.
         with torch.no_grad():
@@ -119,6 +124,10 @@ def main():
         teacher_residual_scale=args.teacher_residual_scale,
         contact_reward=args.contact_reward,
         policy_control=args.policy_control,
+        inverse_torque_reference=inverse_path,
+        inverse_torque_sha256=hashlib.sha256(args.inverse_torque_reference.read_bytes()).hexdigest() if inverse_path else None,
+        inverse_feedforward_changed_on_resume=bool(args.resume and source_meta.get('inverse_torque_sha256')!=(hashlib.sha256(args.inverse_torque_reference.read_bytes()).hexdigest() if inverse_path else None)),
+        teacher_role='PD calibration only; actor is not called' if args.policy_control=='reference_pd' and teacher else 'actor and PD calibration when configured',
         pd_gain_source=gain_source,pd_gains={key:applied_motor[key].tolist() for key in ('kp','kd')},
         robot_urdf=str(args.robot_urdf.resolve()) if args.robot_urdf else None,
         robot_urdf_sha256=hashlib.sha256(args.robot_urdf.read_bytes()).hexdigest() if args.robot_urdf else None,
@@ -130,7 +139,7 @@ def main():
             '0.25 approach + 0.5 position-times-normal-force contact guidance.' if args.contact_reward=='coupled'
             else 'Legacy narrow squared-error tracking with independent position and force-presence bonuses.'),
         teacher_checkpoint_sha256=hashlib.sha256(args.teacher_checkpoint.read_bytes()).hexdigest() if teacher else None,
-        initial_residual_mean='released_actor' if args.policy_control=='teacher_absolute' and not args.resume else ('zero' if teacher and not args.resume else 'default_or_resumed'),
+        initial_residual_mean='released_actor' if args.policy_control=='teacher_absolute' and not args.resume else ('zero' if (teacher or args.policy_control=='reference_pd') and not args.resume else 'default_or_resumed'),
         initialization_checkpoint=str(args.resume.resolve()) if args.resume else None,
         initialization_checkpoint_sha256=hashlib.sha256(args.resume.read_bytes()).hexdigest() if args.resume else None,
         initial_timesteps=int(policy.num_timesteps),

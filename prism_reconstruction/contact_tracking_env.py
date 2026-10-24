@@ -13,6 +13,7 @@ import numpy as np
 from scipy.ndimage import gaussian_filter1d
 
 from .robot_physics import motor_parameters,reference_velocities
+from .reference_control import load_inverse_torques,reference_pd_target
 
 
 REGIONS=('left_hand','right_hand','left_forearm','right_forearm','left_upper_arm','right_upper_arm',
@@ -50,12 +51,14 @@ class ContactTrackingEnv(gym.Env):
     def __init__(self,reference,physics_scene,reward_mode='whole_body',horizon_s=2.,random_start=True,
                  randomize=False,action_mode='joint_offset',teacher_checkpoint=None,teacher_residual_scale=1.,
                  contact_reward='additive',policy_control='residual',pd_gain_source='local',
-                 focus_start_range=None,focus_probability=0.,contact_group=(),contact_group_weight=0.):
+                 focus_start_range=None,focus_probability=0.,contact_group=(),contact_group_weight=0.,
+                 inverse_torque_reference=None):
         if reward_mode not in ('whole_body','hands_only'):raise ValueError('Unknown reward variant')
         if contact_reward not in ('additive','coupled'):raise ValueError('Unknown contact reward recipe')
         self.contact_reward=contact_reward
-        if policy_control not in ('residual','teacher_absolute'):raise ValueError('Unknown policy control mode')
+        if policy_control not in ('residual','teacher_absolute','reference_pd'):raise ValueError('Unknown policy control mode')
         self.policy_control=policy_control
+        if inverse_torque_reference and policy_control!='reference_pd':raise ValueError('Inverse torques require reference-PD control')
         if pd_gain_source not in ('local','checkpoint'):raise ValueError('Unknown PD gain source')
         self.pd_gain_source=pd_gain_source
         self.contact_group=tuple(sorted(set(contact_group)));self.contact_group_weight=float(contact_group_weight)
@@ -82,6 +85,8 @@ class ContactTrackingEnv(gym.Env):
         self.meta=json.loads((self.reference/'metadata.json').read_text())
         if self.meta['independent_diagnostic_frames']:raise ValueError('A continuous trajectory is required')
         self.vref=gaussian_filter1d(reference_velocities(m,self.qref,self.times),1.,axis=0)
+        self.inverse_torques=None if inverse_torque_reference is None else load_inverse_torques(
+            inverse_torque_reference,self.reference,physics_scene,len(self.times),m.nu)
         self.box=mujoco.mj_name2id(m,mujoco.mjtObj.mjOBJ_BODY,'hoi_box')
         self.box_joint=mujoco.mj_name2id(m,mujoco.mjtObj.mjOBJ_JOINT,'hoi_box_free')
         self.box_q=int(m.jnt_qposadr[self.box_joint]);self.box_v=int(m.jnt_dofadr[self.box_joint])
@@ -149,7 +154,7 @@ class ContactTrackingEnv(gym.Env):
             R.T@np.array([0.,0.,-1.]),d.qvel[:6]*.1,(d.xpos[self.box]-d.xpos[1])@R,
             (R.T@object_R)[:,:2].reshape(-1),slots.reshape(-1),future,self.stance[index].astype(float),
             [np.sin(2*np.pi*phase/self.times[-1]),np.cos(2*np.pi*phase/self.times[-1])]])
-        if self.teacher is not None:obs=np.r_[obs,self.teacher.previous_action]
+        if self.teacher is not None and self.policy_control!='reference_pd':obs=np.r_[obs,self.teacher.previous_action]
         if self.policy_control=='teacher_absolute':obs=np.r_[self.teacher.observation(self),obs]
         return np.clip(obs,-100,100).astype(np.float32)
 
@@ -176,10 +181,15 @@ class ContactTrackingEnv(gym.Env):
     def step(self,action):
         m,d=self.model,self.data;action=np.asarray(action,float)
         if action.shape!=(29,) or not np.isfinite(action).all():raise ValueError('Finite 29-joint action required')
-        action=np.clip(action,self.action_space.low,self.action_space.high);q,_,_=self._reference(self.start_time+self.elapsed)
+        action=np.clip(action,self.action_space.low,self.action_space.high);phase=self.start_time+self.elapsed;q,v,_=self._reference(phase)
         if self.policy_control=='teacher_absolute':
             self.teacher.previous_action=action.copy()
             desired=self.teacher.default+self.teacher.action_scale*action
+        elif self.policy_control=='reference_pd':
+            torque=np.zeros(m.nu) if self.inverse_torques is None else np.array([
+                np.interp(phase,self.times,column) for column in self.inverse_torques.T])
+            desired=reference_pd_target(q[self.qadr],v[self.vadr],self.motor['kp'],self.motor['kd'],torque)
+            desired+=self.action_scale*action
         else:
             desired=(self.teacher.desired_positions(self,self.teacher_residual_scale*action) if self.teacher is not None
                      else q[self.qadr]+self.action_scale*action)

@@ -19,6 +19,8 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--checkpoint',type=Path)
     parser.add_argument('--teacher-checkpoint',type=Path)
+    parser.add_argument('--inverse-torque-reference',type=Path,help='Optional gap_*.npz from a matching inverse-force audit; motor feedforward only')
+    parser.add_argument('--reference-pd',action='store_true',help='Track reference positions and velocities using calibrated motor PD instead of the teacher actor')
     parser.add_argument('--teacher-residual-scale',type=float,default=1.)
     parser.add_argument('--pd-gain-source',choices=('local','checkpoint'))
     parser.add_argument('--start-times',type=float,nargs='+',default=[0.,2.,4.,4.79,8.])
@@ -26,6 +28,8 @@ def main():
     parser.add_argument('--seed',type=int,default=0)
     args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
+    if (args.inverse_torque_reference or args.reference_pd) and args.checkpoint:
+        raise ValueError('Learned policy control settings must come from its training metadata')
     action_mode='joint_offset'
     if args.checkpoint:
         folder=args.checkpoint.parent
@@ -38,13 +42,16 @@ def main():
     residual_scale=training_metadata.get('teacher_residual_scale',1.) if args.checkpoint else args.teacher_residual_scale
     contact_reward=training_metadata.get('contact_reward','additive') if args.checkpoint else 'additive'
     policy_control=training_metadata.get('policy_control','residual') if args.checkpoint else 'residual'
+    if args.inverse_torque_reference or args.reference_pd:policy_control='reference_pd'
+    inverse_path=training_metadata.get('inverse_torque_reference') if args.checkpoint else args.inverse_torque_reference
     gain_source=args.pd_gain_source or (training_metadata.get('pd_gain_source','local') if args.checkpoint else ('checkpoint' if teacher else 'local'))
     contact_group=training_metadata.get('contact_group',[]) if args.checkpoint else []
     contact_group_weight=training_metadata.get('contact_group_weight',0.) if args.checkpoint else 0.
     env=ContactTrackingEnv(args.reference,args.physics_scene,horizon_s=args.horizon,random_start=False,
         action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale,
         contact_reward=contact_reward,policy_control=policy_control,pd_gain_source=gain_source,
-        contact_group=contact_group,contact_group_weight=contact_group_weight)
+        contact_group=contact_group,contact_group_weight=contact_group_weight,
+        inverse_torque_reference=inverse_path)
     policy=None
     if args.checkpoint:
         from stable_baselines3 import PPO
@@ -104,6 +111,13 @@ def main():
             checkpoint_sha256=hashlib.sha256(args.checkpoint.read_bytes()).hexdigest() if args.checkpoint else None,
             robot_root_assistance=False,object_assistance=False,object_mass_kg=float(env.model.body_mass[env.box]),
             safe_for_robot_execution=False,**summary)
+        if policy_control=='reference_pd':
+            metadata['controller']=('residual_' if policy else '')+('inverse_torque_feedforward_PD' if inverse_path else 'reference_position_velocity_PD')
+        if inverse_path:
+            metadata.update(
+                inverse_torque_reference=str(Path(inverse_path).resolve()),
+                inverse_torque_sha256=hashlib.sha256(Path(inverse_path).read_bytes()).hexdigest(),
+                feedforward_assumptions='Interpolated reference motor torques only; explanatory contact forces are never applied. Includes reference velocities in PD compensation. Infeasible reference frames remain in the input; no physical tracking guarantee.')
         (output/'metadata.json').write_text(json.dumps(metadata,indent=2,allow_nan=False))
         summaries.append(summary);print(json.dumps(summary),flush=True)
     (args.output/'summary.json').write_text(json.dumps(summaries,indent=2,allow_nan=False))

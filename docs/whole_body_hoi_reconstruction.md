@@ -387,6 +387,25 @@ Check penetration, acceleration, inverse-force feasibility and unassisted
 rollouts before selecting a new reference; closing a geometric gap alone is not
 a physical contact demonstration.
 
+`--policy-control reference_pd` uses reference joint positions and velocities
+instead of the released teacher actor. `--inverse-torque-reference gap_0.0020.npz`
+optionally adds motor torques from a matching full-frame inverse-force audit.
+The position-PD target is `qref + (tau_ff + Kd*vref)/Kp`; the existing bounded
+motor loop implements feedforward plus position/velocity feedback. Explanatory
+contact forces are never applied to the robot root or object. Reference and
+physics hashes and full frame coverage must match. With a teacher checkpoint,
+only its PD calibration is used in this mode, not its actor. Residual PPO starts
+with zero mean and may adjust the 29 motor targets. Evaluation also accepts
+`--reference-pd` for the matched baseline without inverse feedforward.
+
+On the selected video, inverse feedforward increased the 4.79 s-start rollout
+from 0.48 to 1.36 s and produced 0.10 s of right-thigh force above 1 N with target
+gap below 3 cm. This remains a short transient, not successful whole-body tracking.
+Encoding the same desired targets through teacher action coordinates agrees
+within 6e-14 in the first physical step, but roundoff grows in contact-sensitive
+rollouts (one start differed by 0.26 s in termination). Do not assert exact
+long-rollout parity or robust performance from one deterministic diagnostic.
+
 `--temporal-force-solver clarabel_constrained` instead minimizes force variation
 and force magnitude subject to a per-frame normalized wrench residual cap of
 `max(0.08, independent_fit_residual)`. A `1e-6` numerical feasibility allowance is
