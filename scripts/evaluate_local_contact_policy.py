@@ -19,6 +19,7 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--checkpoint',type=Path)
     parser.add_argument('--teacher-checkpoint',type=Path)
+    parser.add_argument('--teacher-residual-scale',type=float,default=1.)
     parser.add_argument('--start-times',type=float,nargs='+',default=[0.,2.,4.,4.79,8.])
     parser.add_argument('--horizon',type=float,default=12.)
     parser.add_argument('--seed',type=int,default=0)
@@ -33,8 +34,9 @@ def main():
     teacher=args.teacher_checkpoint
     if args.checkpoint:
         teacher=teacher or training_metadata.get('teacher_checkpoint')
+    residual_scale=training_metadata.get('teacher_residual_scale',1.) if args.checkpoint else args.teacher_residual_scale
     env=ContactTrackingEnv(args.reference,args.physics_scene,horizon_s=args.horizon,random_start=False,
-        action_mode=action_mode,teacher_checkpoint=teacher)
+        action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale)
     policy=None
     if args.checkpoint:
         from stable_baselines3 import PPO
@@ -75,6 +77,7 @@ def main():
         metadata=dict(schema='g1_unassisted_physics_rollout_v1',source_video_sha256=env.meta['source_video_sha256'],
             independent_diagnostic_frames=False,controller=('teacher_plus_residual_PPO' if teacher else 'residual_PPO') if policy else ('released_PRISM_teacher' if teacher else 'zero_residual_PD'),
             action_mode=action_mode,
+            teacher_residual_scale=residual_scale,
             teacher_checkpoint_sha256=env.teacher.sha256 if env.teacher is not None else None,
             evaluation_code_sha256={path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in
                 (Path(__file__),Path(__file__).resolve().parents[1]/'prism_reconstruction/contact_tracking_env.py')},

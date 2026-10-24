@@ -229,8 +229,18 @@ boundaries are less accurate, and internal joint torques are not constrained by
 this objective. `--balance-model approximate` retains the simpler baseline.
 The default hand patch preserves source points; `--hand-patch inner` and
 `--hand-normal-weight` expose the stronger palm assumption rather than silently
-imposing it. Closest collision-surface planes additionally close visually supported
-hand/box gaps, which point-distance costs alone may leave open.
+imposing it. Optional `--hand-closure-weight` penalizes the minimum cuboid SDF
+over sampled surfaces of each visually supported hand. This is recomputed every
+gradient iteration; a fixed closest-point plane can become invalid as the hand
+moves. The default weight is zero so that experimental gap closure is explicit.
+Point-distance, surface-gap and inverse-dynamics diagnostics must all be checked.
+
+The teacher residual scale is explicit and stored with each checkpoint. Increasing
+it expands the reachable target angles while retaining physical motor torque
+bounds. Initial Gaussian exploration is inversely scaled to preserve the same
+applied-action standard deviation. Zero-residual rollouts are identical across
+scales; resuming with a different scale is rejected to avoid silently changing
+an existing policy's meaning.
 
 `scripts/audit_robot_contact_dynamics.py` computes required generalized forces
 from the reference accelerations, mass matrix, bias and passive forces. It fits

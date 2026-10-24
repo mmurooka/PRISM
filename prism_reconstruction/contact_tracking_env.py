@@ -24,7 +24,7 @@ class ContactTrackingEnv(gym.Env):
     metadata={'render_modes':[]}
 
     def __init__(self,reference,physics_scene,reward_mode='whole_body',horizon_s=2.,random_start=True,
-                 randomize=False,action_mode='joint_offset',teacher_checkpoint=None):
+                 randomize=False,action_mode='joint_offset',teacher_checkpoint=None,teacher_residual_scale=1.):
         if reward_mode not in ('whole_body','hands_only'):raise ValueError('Unknown reward variant')
         self.reference=Path(reference);self.reward_mode=reward_mode;self.horizon_s=float(horizon_s)
         self.random_start=random_start;self.randomize=randomize
@@ -51,6 +51,9 @@ class ContactTrackingEnv(gym.Env):
         self.action_space=gym.spaces.Box(-1.,1.,(29,),np.float32)
         self.previous_action=np.zeros(29);self.elapsed=0.;self.start_time=0.
         self.teacher=None
+        self.teacher_residual_scale=float(teacher_residual_scale)
+        if not np.isfinite(self.teacher_residual_scale) or self.teacher_residual_scale<=0:
+            raise ValueError('Teacher residual scale must be positive and finite')
         if teacher_checkpoint:
             from .released_teacher import ReleasedTeacher
             self.teacher=ReleasedTeacher(teacher_checkpoint,m,self.motor)
@@ -120,7 +123,7 @@ class ContactTrackingEnv(gym.Env):
         m,d=self.model,self.data;action=np.asarray(action,float)
         if action.shape!=(29,) or not np.isfinite(action).all():raise ValueError('Finite 29-joint action required')
         action=np.clip(action,-1,1);q,_,_=self._reference(self.start_time+self.elapsed)
-        desired=(self.teacher.desired_positions(self,action) if self.teacher is not None
+        desired=(self.teacher.desired_positions(self,self.teacher_residual_scale*action) if self.teacher is not None
                  else q[self.qadr]+self.action_scale*action)
         for _ in range(self.substeps):
             torque=self.motor['kp']*(desired-d.qpos[self.qadr])-self.motor['kd']*d.qvel[self.vadr]

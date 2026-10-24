@@ -34,10 +34,13 @@ def main():
     parser.add_argument('--balance-weight',type=float,default=10.)
     parser.add_argument('--hand-patch',choices=('source','inner'),default='source')
     parser.add_argument('--hand-normal-weight',type=float,default=0.)
+    parser.add_argument('--hand-closure-weight',type=float,default=0.)
     args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
     if args.iterations<1:raise ValueError('Positive iteration count required')
     torch.set_num_threads(1);started=time.time();code_sha=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    dependency_sha={name:hashlib.sha256((Path(__file__).resolve().parents[1]/'prism_reconstruction'/name).read_bytes()).hexdigest()
+        for name in ('torch_robot.py','contact_ik.py')}
     with np.load(args.input/'trajectory.npz') as a:arrays=dict(a)
     records=json.loads((args.input/'diagnostics.json').read_text());meta=json.loads((args.input/'metadata.json').read_text())
     solver=ContactIK(args.input/'scene.xml');m,d=solver.model,solver.data
@@ -68,6 +71,8 @@ def main():
     sample_bodies=[];sample_points=[]
     for body,points in solver.surface.items():
         chosen=np.unique(np.r_[np.linspace(0,len(points)-1,min(96,len(points))).astype(int),points.argmin(axis=0),points.argmax(axis=0)])
+        name=mujoco.mj_id2name(m,mujoco.mjtObj.mjOBJ_BODY,body)
+        if any(part in name for part in ('rubber_hand','thumb','pinky')):chosen=np.arange(len(points))
         sample_bodies.extend([body]*len(chosen));sample_points.extend(points[chosen])
     sample_bodies=torch.tensor(sample_bodies,device=args.device);sample_points=tensor(np.array(sample_points))
     contact_frames=[];contact_bodies=[];contact_robot=[];contact_object=[];contact_weights=[];contact_reliable=[]
@@ -125,6 +130,11 @@ def main():
     self_pairs=np.array([(a,b) for a,b in solver.pairs if a!=solver.floor_geom and b!=solver.floor_geom],int)
     reliable_hand_welds=[{int(m.body_weldid[t['robot_body_id']]) for t in record['targets']
         if t['region'] in ('left_hand','right_hand') and t['evidence']['visual_geometric']} for record in records]
+    hand_closure_masks=[]
+    sample_weld=m.body_weldid[sample_bodies.cpu().numpy()]
+    for weld in sorted(set().union(*reliable_hand_welds)):
+        hand_closure_masks.append((torch.tensor(sample_weld==weld,device=args.device),
+            torch.tensor([weld in active for active in reliable_hand_welds],device=args.device)))
     self_plane=None
     def snapshot():
         joint,root,root6,box,box6=decode()
@@ -134,32 +144,22 @@ def main():
         result[:,solver.box_qadr+3:solver.box_qadr+7]=Rotation.from_matrix(rotation_6d(box6).detach().cpu().numpy()).as_quat()[:,[3,0,1,2]]
         return result
     def refresh_self_planes():
-        frames=[];bodies1=[];bodies2=[];points1=[];points2=[];normals=[];closure=[]
+        frames=[];bodies1=[];bodies2=[];points1=[];points2=[];normals=[]
         for frame,pose in enumerate(snapshot()):
             d.qpos[:]=pose;mujoco.mj_forward(m,d)
             distances=np.linalg.norm(d.geom_xpos[self_pairs[:,0]]-d.geom_xpos[self_pairs[:,1]],axis=1)
-            radius=m.geom_rbound[self_pairs].sum(axis=1)+.08
-            closest_hands={}
+            radius=m.geom_rbound[self_pairs].sum(axis=1)+.025
             for a,b in self_pairs[distances<radius]:
-                segment=np.zeros(6);distance=mujoco.mj_geomDistance(m,d,int(a),int(b),.08,segment)
-                if distance>=.08 or abs(distance)<1e-8:continue
+                segment=np.zeros(6);distance=mujoco.mj_geomDistance(m,d,int(a),int(b),.025,segment)
+                if distance>=.025 or abs(distance)<1e-8:continue
                 first=int(m.geom_bodyid[a]);last=int(m.geom_bodyid[b])
-                other=last if first==solver.box_body else first if last==solver.box_body else -1
-                weld=int(m.body_weldid[other]) if other>=0 else -1
-                required_hand=weld in reliable_hand_welds[frame]
-                if distance>=.025 and not required_hand:continue
-                if required_hand and (weld not in closest_hands or distance<closest_hands[weld][0]):
-                    closest_hands[weld]=(distance,len(frames))
                 frames.append(frame);bodies1.append(first);bodies2.append(last)
                 points1.append((segment[:3]-d.xpos[first])@d.xmat[first].reshape(3,3))
                 points2.append((segment[3:]-d.xpos[last])@d.xmat[last].reshape(3,3))
                 normals.append((segment[3:]-segment[:3])/distance)
-                closure.append(False)
-            for _,index in closest_hands.values():closure[index]=True
         if not frames:return None
         return (torch.tensor(frames,device=args.device),torch.tensor(bodies1,device=args.device),
-                torch.tensor(bodies2,device=args.device),tensor(points1),tensor(points2),tensor(normals),
-                torch.tensor(closure,device=args.device))
+                torch.tensor(bodies2,device=args.device),tensor(points1),tensor(points2),tensor(normals))
     history=[];best=None;best_loss=float('inf')
     for iteration in range(args.iterations):
         if iteration%50==0:self_plane=refresh_self_planes();best_loss=float('inf')
@@ -209,14 +209,16 @@ def main():
         signed=(edge[:,0]*offset[:,1]-edge[:,1]*offset[:,0])/torch.linalg.vector_norm(edge,dim=-1).clamp_min(1e-5)
         balance=(torch.relu(-signed)/.03).square().mean()+force_penalty
         self_loss=joint.sum()*0;closure_loss=joint.sum()*0
+        for points_mask,frames_mask in hand_closure_masks:
+            nearest=gap[:,points_mask].amin(-1)
+            closure_loss+=(nearest[frames_mask]/.005).square().mean()/len(hand_closure_masks)
         if self_plane is not None:
-            f,b1,b2,p1,p2,n,closure=self_plane
+            f,b1,b2,p1,p2,n=self_plane
             first=torch.einsum('nij,nj->ni',rotations[f,b1],p1)+positions[f,b1]
             last=torch.einsum('nij,nj->ni',rotations[f,b2],p2)+positions[f,b2]
             violations=(torch.relu(.001-((last-first)*n).sum(-1))/.01).square()
             self_loss=torch.topk(violations,min(100,len(violations))).values.mean()
-            if closure.any():closure_loss=((((last-first)*n).sum(-1)[closure])/.005).square().mean()
-        loss=prior+smooth+10*contact+args.hand_normal_weight*normal_loss+15*foot_loss+100*penetration+100*ground+30*object_floor+args.balance_weight*balance+100*self_loss+10*closure_loss
+        loss=prior+smooth+10*contact+args.hand_normal_weight*normal_loss+15*foot_loss+100*penetration+100*ground+30*object_floor+args.balance_weight*balance+100*self_loss+args.hand_closure_weight*closure_loss
         if not torch.isfinite(loss):raise FloatingPointError('Nonfinite global trajectory loss')
         value=float(loss.detach())
         if value<best_loss:best_loss=value;best=[parameter.detach().clone() for parameter in parameters]
@@ -231,7 +233,7 @@ def main():
         if iteration%25==0:print(json.dumps(item),flush=True)
     with torch.no_grad():
         for parameter,value in zip(parameters,best):parameter.copy_(value)
-    q=snapshot();errors=[];penetrations=[]
+    q=snapshot();errors=[];penetrations=[];region_errors={}
     for frame,pose in enumerate(q):
         d.qpos[:]=pose;mujoco.mj_forward(m,d);record=records[frame]
         record.pop('stance_feet',None);record.pop('skeleton_error_mean_m',None)
@@ -239,6 +241,7 @@ def main():
             point,_=point_jacobian(m,d,target['robot_body_id'],np.asarray(target['robot_point_local']))
             obj,_=point_jacobian(m,d,solver.box_body,np.asarray(target['point_object']))
             target['position_error_m']=float(np.linalg.norm(point-obj));errors.append(target['position_error_m'])
+            region_errors.setdefault(target['region'],[]).append(target['position_error_m'])
             local=(point-d.xpos[solver.box_body])@d.xmat[solver.box_body].reshape(3,3)
             original_point=np.asarray(target.get('point_object_original',target['point_object']))
             target['original_position_error_m']=float(np.linalg.norm(local-original_point))
@@ -265,13 +268,16 @@ def main():
             contact_targets='Retained from prior trajectory, including its documented relocation.',
             uncertain_contact_loss='Saturating penalty for dynamics-only non-unique targets; visual/individually necessary targets remain quadratic.',
             hand_patch=args.hand_patch,hand_normal_weight=args.hand_normal_weight,
-            hand_surface_closure='Nearest collision surface per visually supported hand; refreshed every 50 iterations, no contact forces at a distance.',
+            hand_surface_closure='Optional cuboid SDF gap at nearest sampled hand surface; recomputed every gradient iteration.',
+            hand_closure_weight=args.hand_closure_weight,
             collision_samples_per_body=96,collision_plane_refresh_iterations=50,
             collision_planes='Near robot/object and non-adjacent self-collision pairs from MuJoCo.'),
         derivatives_before=derivative_summary(m,original,times),derivatives_after=derivative_summary(m,q,times),
         contact_error_median_m=float(np.median(errors)),contact_error_p95_m=float(np.quantile(errors,.95)),
+        contact_error_by_region={name:dict(count=len(values),median_m=float(np.median(values)),p95_m=float(np.quantile(values,.95)))
+            for name,values in region_errors.items()},
         maximum_penetration_m=float(max(penetrations)),frames_penetrating_1cm=int(sum(v>.01 for v in penetrations)),
-        elapsed_s=time.time()-started,refinement_code_sha256=code_sha,rl_ready=False,
+        elapsed_s=time.time()-started,refinement_code_sha256=code_sha,refinement_dependency_sha256=dependency_sha,rl_ready=False,
         method='Global cubic-spline trajectory optimization with contact, collision, floor, smoothness and selected support-wrench objective.')
     meta.pop('skeleton_error_mean_m',None)
     args.output.mkdir(parents=True);np.savez_compressed(args.output/'trajectory.npz',**arrays)
