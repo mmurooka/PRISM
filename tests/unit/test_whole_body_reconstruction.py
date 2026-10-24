@@ -116,6 +116,20 @@ class DynamicsTests(unittest.TestCase):
         force = result['forces_world'][0]
         self.assertLessEqual(np.linalg.norm(force[:2]), .2*force[2]+1e-8)
 
+    def test_knee_thigh_ambiguity_retains_group_necessity(self):
+        candidates=[ForceCandidate(region,np.array(point),np.array([0,0,1]),friction=0)
+                    for region,point in [('left_hand',[-.3,-.2,-.5]),('right_hand',[.3,-.2,-.5]),
+                                         ('right_knee',[0,.3,-.5]),('right_thigh',[0,.3,-.5])]]
+        result=solve_contact_forces(candidates,[0,0,9.81,0,0,0],[0,0,0],1,
+                                   removal_groups={'right_knee_and_thigh':['right_knee','right_thigh']})
+        self.assertTrue(result['feasible'])
+        self.assertFalse(result['necessary'][2:].any())
+        self.assertTrue(result['necessary_groups']['right_knee_and_thigh'])
+        unsupported=solve_contact_forces(candidates,[0,0,-9.81,0,0,0],[0,0,0],1,
+                                        removal_groups={'right_knee_and_thigh':['right_knee','right_thigh']})
+        self.assertFalse(unsupported['feasible'])
+        self.assertFalse(unsupported['necessary_groups']['right_knee_and_thigh'])
+
 
 class RigidTrackingTests(unittest.TestCase):
     def test_robust_tracks_and_occlusion_failure(self):

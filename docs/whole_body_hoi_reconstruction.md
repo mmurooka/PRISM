@@ -85,6 +85,12 @@ sequence optimization of region forces inside hard friction cones; its per-frame
 feasibility residuals are stored separately. Missing candidate forces stay zero;
 the temporal prior must not be interpreted as contact identification. Human poses
 and object poses are not jointly optimized here.
+The solver also removes semantic groups together (knee plus thigh, each arm, or
+trunk). If knee and thigh can replace one another, neither individual region is
+identifiable, but their combined support may still be necessary. Archives retain
+both individual and group-level tests; group necessity must not be reported as an
+exact knee contact label. All necessity flags are false when the full fit is
+infeasible.
 Unseen box faces, occluded body parts, camera motion, metric scale and numerical
 accelerations can substantially alter the answer. Edge/corner normals are represented
 by one deterministic adjacent face. Region surface points on each face are collapsed

@@ -104,7 +104,8 @@ def friction_rays(normal, friction, count=8):
 
 
 def solve_contact_forces(candidates, wrench_world, com_world, characteristic_length_m,
-                         regularization=1e-5, ambiguity_check=True, tolerance=0.08):
+                         regularization=1e-5, ambiguity_check=True, tolerance=0.08,
+                         removal_groups=None):
     """Nonnegative friction-cone fit, with contact-removal evidence.
 
     A force-bearing candidate is not necessarily identifiable: `necessary`
@@ -161,8 +162,17 @@ def solve_contact_forces(candidates, wrench_world, com_world, characteristic_len
             keep = np.repeat([c.region != region for c in candidates], 8)
             removal[region] = float(fit(keep, False)[1])
     necessary = np.asarray([feasible and removal.get(c.region, 0) > tolerance for c in candidates], bool)
+    group_removal = {}
+    if ambiguity_check:
+        for name, members in (removal_groups or {}).items():
+            if not isinstance(name,str) or not name or isinstance(members,str) or not members:
+                raise ValueError('Removal groups require named, nonempty collections of regions')
+            keep = np.repeat([c.region not in members for c in candidates], 8)
+            group_removal[name] = float(fit(keep, False)[1])
     return dict(forces_world=forces, normalized_residual=float(residual), feasible=bool(feasible),
                 necessary=necessary, residual_without_region=removal,
+                residual_without_group=group_removal,
+                necessary_groups={name:bool(feasible and value>tolerance) for name,value in group_removal.items()},
                 explained_wrench_world=(matrix @ coefficients)/scale)
 
 

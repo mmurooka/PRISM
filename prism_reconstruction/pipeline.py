@@ -11,6 +11,15 @@ from .contacts import ContactConfig, infer_contacts
 from .dynamics import ForceCandidate, floor_candidates, required_wrench, solve_contact_forces
 
 
+SUPPORT_GROUPS = {
+    'left_knee_and_thigh': ['left_knee','left_thigh'],
+    'right_knee_and_thigh': ['right_knee','right_thigh'],
+    'left_arm': ['left_hand','left_forearm','left_upper_arm'],
+    'right_arm': ['right_hand','right_forearm','right_upper_arm'],
+    'trunk': ['pelvis','torso'],
+}
+
+
 def human_force_candidates(contact, scores, regions, pose, frame, config, friction):
     gap = contact['signed_gap_m'][frame]
     possible = (gap >= -config.max_penetration_m) & (gap <= config.leave_distance_m)
@@ -53,6 +62,7 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
     names = contact['region_names']
     necessary = np.zeros((len(times), len(names)), bool)
     possible = np.zeros_like(necessary)
+    group_necessary = np.zeros((len(times),len(SUPPORT_GROUPS)),bool)
     residual = np.empty(len(times))
     hand_only_residual = np.empty(len(times))
     records = []
@@ -64,7 +74,9 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
             floor = floor_candidates(pose, half, data['floor_normal_world'], float(data['floor_offset_m']), friction=friction)
             candidates += floor
             patches += [np.empty(0, dtype=int) for _ in floor]
-        fit = solve_contact_forces(candidates, motion['wrench_world'][t], motion['com_world'][t], length)
+        fit = solve_contact_forces(candidates, motion['wrench_world'][t], motion['com_world'][t], length,
+                                   removal_groups=SUPPORT_GROUPS)
+        group_necessary[t]=[fit['necessary_groups'][name] for name in SUPPORT_GROUPS]
         candidate_sequence.append(candidates)
         hand_candidates = [c for c in candidates if c.source == 'scene' or c.region in ('left_hand', 'right_hand')]
         hand_fit = solve_contact_forces(hand_candidates, motion['wrench_world'][t], motion['com_world'][t], length,
@@ -86,7 +98,9 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
                                 explanatory=bool(selected), necessary=bool(fit['necessary'][k])))
         records.append(dict(frame=t, time_s=float(times[t]), feasible=fit['feasible'],
                             normalized_residual=float(residual[t]), hand_only_residual=float(hand_only_residual[t]),
-                            residual_without_region=fit['residual_without_region'], candidates=details))
+                            residual_without_region=fit['residual_without_region'],
+                            residual_without_group=fit['residual_without_group'],
+                            necessary_groups=fit['necessary_groups'],candidates=details))
     metadata = dict(schema='whole_body_hoi_contacts_v1', contact_config=asdict(config),
                     friction_coefficient=friction, mass_kg=mass_kg,
                     derivative_smoothing_window_s=smoothing_window_s,
@@ -98,11 +112,14 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
                     shape_assumption=str(np.asarray(data.get('shape_assumption', 'provided_cuboid')).item()),
                     contact_mode_codes={'0':'no_visual_geometric_contact','1':'sticking','2':'sliding'},
                     interpretation='Explanatory forces and model-conditional necessity, not measured forces or uniquely identified contacts.',
+                    support_groups=SUPPORT_GROUPS,
+                    group_interpretation='Group necessity means at least one member must contribute under the model; it does not localize contact within that group.',
                     intervals=contact.pop('intervals'))
     metadata.update({k:str(np.asarray(data[k]).item()) for k in ('world_frame','scale_source','source_video_sha256','object_id')})
     metadata['contact_prior_source']=str(np.asarray(data.get('contact_prior_source','provided_unspecified')).item())
     arrays = dict(**contact, **motion, timestamps_s=times, world_from_object=poses, box_half_extents=half,
                   human_vertex_regions=regions, dynamics_possible=possible, dynamics_necessary=necessary,
+                  dynamics_group_names=np.asarray(list(SUPPORT_GROUPS)),dynamics_group_necessary=group_necessary,
                   normalized_wrench_residual=residual, hand_only_wrench_residual=hand_only_residual)
     if not np.isfinite(temporal_force_smoothness) or temporal_force_smoothness<0:
         raise ValueError('Temporal force smoothness must be finite and nonnegative')
