@@ -77,7 +77,14 @@ def main():
     error=float(np.max(abs(initial_states[0]-initial_states[1])))
     if error!=0:raise AssertionError('Pre-intervention states differ')
     first=branches['normal_contacts'];second=branches['leg_contact_disabled'];count=min(len(first),len(second))
+    poses=[]
+    for branch in ('normal_contacts','leg_contact_disabled'):
+        with np.load(args.output/branch/'trajectory.npz') as archive:poses.append(archive['qpos'][count-1,env.box_q:env.box_q+7])
+    rotation_difference=2*np.arccos(np.clip(abs(poses[0][3:]@poses[1][3:]),0,1))
     summary=dict(pre_intervention_state_max_error=error,common_duration_s=count*.02,
+        common_pose_snapshot_elapsed_s=(count-1)*env.control_dt,
+        box_position_difference_m=float(np.linalg.norm(poses[0][:3]-poses[1][:3])),
+        box_rotation_difference_degrees=float(np.rad2deg(rotation_difference)),
         box_height_difference_normal_minus_disabled_m=first[count-1]['box_height_m']-second[count-1]['box_height_m'],
         selected_body_upward_impulse_normal_Ns=.02*sum(r['selected_body_upward_force_n'] for r in first[intervention_step:count]),
         selected_body_upward_impulse_disabled_Ns=.02*sum(r['selected_body_upward_force_n'] for r in second[intervention_step:count]),
