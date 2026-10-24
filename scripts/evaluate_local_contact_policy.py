@@ -18,12 +18,23 @@ def main():
     parser.add_argument('--physics-scene',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--checkpoint',type=Path)
+    parser.add_argument('--teacher-checkpoint',type=Path)
     parser.add_argument('--start-times',type=float,nargs='+',default=[0.,2.,4.,4.79,8.])
     parser.add_argument('--horizon',type=float,default=12.)
     parser.add_argument('--seed',type=int,default=0)
     args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
-    env=ContactTrackingEnv(args.reference,args.physics_scene,horizon_s=args.horizon,random_start=False)
+    action_mode='joint_offset'
+    if args.checkpoint:
+        folder=args.checkpoint.parent
+        if folder.name=='checkpoints':folder=folder.parent
+        training_metadata=json.loads((folder/'metadata.json').read_text())
+        action_mode=training_metadata.get('action_mode','joint_offset')
+    teacher=args.teacher_checkpoint
+    if args.checkpoint:
+        teacher=teacher or training_metadata.get('teacher_checkpoint')
+    env=ContactTrackingEnv(args.reference,args.physics_scene,horizon_s=args.horizon,random_start=False,
+        action_mode=action_mode,teacher_checkpoint=teacher)
     policy=None
     if args.checkpoint:
         from stable_baselines3 import PPO
@@ -50,10 +61,13 @@ def main():
             terminated=terminated,truncated=truncated,return_=float(sum(rewards)),
             object_error_mean_m=float(np.mean([m['object_error_m'] for m in metrics])),
             object_error_final_m=metrics[-1]['object_error_m'],
+            failure_reasons=metrics[-1]['failure_reasons'],
             contact_force_fraction_mean=float(np.mean([m['contact_force_fraction'] for m in metrics if m['active_contact_targets']]))
                 if any(m['active_contact_targets'] for m in metrics) else None)
         metadata=dict(schema='g1_unassisted_physics_rollout_v1',source_video_sha256=env.meta['source_video_sha256'],
-            independent_diagnostic_frames=False,controller='residual_PPO' if policy else 'zero_residual_PD',
+            independent_diagnostic_frames=False,controller=('teacher_plus_residual_PPO' if teacher else 'residual_PPO') if policy else ('released_PRISM_teacher' if teacher else 'zero_residual_PD'),
+            action_mode=action_mode,
+            teacher_checkpoint_sha256=env.teacher.sha256 if env.teacher is not None else None,
             checkpoint_sha256=hashlib.sha256(args.checkpoint.read_bytes()).hexdigest() if args.checkpoint else None,
             robot_root_assistance=False,object_assistance=False,object_mass_kg=float(env.model.body_mass[env.box]),
             safe_for_robot_execution=False,**summary)

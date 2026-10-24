@@ -24,12 +24,15 @@ class ContactTrackingEnv(gym.Env):
     metadata={'render_modes':[]}
 
     def __init__(self,reference,physics_scene,reward_mode='whole_body',horizon_s=2.,random_start=True,
-                 randomize=False):
+                 randomize=False,action_mode='joint_offset',teacher_checkpoint=None):
         if reward_mode not in ('whole_body','hands_only'):raise ValueError('Unknown reward variant')
         self.reference=Path(reference);self.reward_mode=reward_mode;self.horizon_s=float(horizon_s)
         self.random_start=random_start;self.randomize=randomize
         self.model=m=mujoco.MjModel.from_xml_path(str(physics_scene));self.data=d=mujoco.MjData(m)
         self.motor=motor_parameters(m);self.qadr=self.motor['qadr'];self.vadr=self.motor['vadr']
+        if action_mode not in ('joint_offset','torque_fraction'):raise ValueError('Unknown action parameterization')
+        self.action_mode=action_mode
+        self.action_scale=np.full(29,.25) if action_mode=='joint_offset' else .25*self.motor['upper']/self.motor['kp']
         with np.load(self.reference/'trajectory.npz') as a:
             self.qref=a['qpos'].copy();self.times=a['timestamps_s'].copy();self.stance=a['stance'].copy()
         if self.qref.shape!=(len(self.times),m.nq):raise ValueError('Reference/model configuration mismatch')
@@ -47,6 +50,10 @@ class ContactTrackingEnv(gym.Env):
         if not np.isclose(self.substeps*m.opt.timestep,self.control_dt):raise ValueError('Control/physics steps must divide exactly')
         self.action_space=gym.spaces.Box(-1.,1.,(29,),np.float32)
         self.previous_action=np.zeros(29);self.elapsed=0.;self.start_time=0.
+        self.teacher=None
+        if teacher_checkpoint:
+            from .released_teacher import ReleasedTeacher
+            self.teacher=ReleasedTeacher(teacher_checkpoint,m,self.motor)
         d.qpos[:]=self.qref[0];mujoco.mj_forward(m,d)
         observation=self._observation()
         self.observation_space=gym.spaces.Box(-100.,100.,observation.shape,np.float32)
@@ -90,6 +97,7 @@ class ContactTrackingEnv(gym.Env):
             R.T@np.array([0.,0.,-1.]),d.qvel[:6]*.1,(d.xpos[self.box]-d.xpos[1])@R,
             (R.T@object_R)[:,:2].reshape(-1),slots.reshape(-1),future,self.stance[index].astype(float),
             [np.sin(2*np.pi*phase/self.times[-1]),np.cos(2*np.pi*phase/self.times[-1])]])
+        if self.teacher is not None:obs=np.r_[obs,self.teacher.previous_action]
         return np.clip(obs,-100,100).astype(np.float32)
 
     def reset(self,*,seed=None,options=None):
@@ -98,6 +106,7 @@ class ContactTrackingEnv(gym.Env):
         self.start_time=float(options.get('start_time',self.np_random.uniform(self.times[0],upper) if self.random_start else self.times[0]))
         if not self.times[0]<=self.start_time<self.times[-1]:raise ValueError('Reset phase outside reference')
         self.elapsed=0.;self.previous_action=np.zeros(29)
+        if self.teacher is not None:self.teacher.reset()
         q,v,_=self._reference(self.start_time);mujoco.mj_resetData(m,d)
         factor=self.np_random.uniform(.7,1.3) if self.randomize else 1.
         m.body_mass[self.box]=self.base_mass*factor;m.body_inertia[self.box]=self.base_inertia*factor
@@ -111,7 +120,8 @@ class ContactTrackingEnv(gym.Env):
         m,d=self.model,self.data;action=np.asarray(action,float)
         if action.shape!=(29,) or not np.isfinite(action).all():raise ValueError('Finite 29-joint action required')
         action=np.clip(action,-1,1);q,_,_=self._reference(self.start_time+self.elapsed)
-        desired=q[self.qadr]+.25*action
+        desired=(self.teacher.desired_positions(self,action) if self.teacher is not None
+                 else q[self.qadr]+self.action_scale*action)
         for _ in range(self.substeps):
             torque=self.motor['kp']*(desired-d.qpos[self.qadr])-self.motor['kd']*d.qvel[self.vadr]
             d.ctrl[:]=np.clip(torque,self.motor['lower'],self.motor['upper'])
@@ -147,7 +157,10 @@ class ContactTrackingEnv(gym.Env):
         tilt=float(d.xmat[1].reshape(3,3)[2,2])
         finite=bool(np.isfinite(d.qpos).all() and np.isfinite(d.qvel).all())
         warnings=int(sum(warning.number for warning in d.warning))
-        terminated=not finite or warnings>0 or d.qpos[2]<.3 or tilt<.25 or root_error>.5 or object_error>.6
+        failure_reasons=[name for name,condition in (
+            ('nonfinite_state',not finite),('physics_warning',warnings>0),('low_root',d.qpos[2]<.3),
+            ('root_tilt',tilt<.25),('root_tracking',root_error>.5),('object_tracking',object_error>.6)) if condition]
+        terminated=bool(failure_reasons)
         truncated=self.elapsed>=self.horizon_s or self.start_time+self.elapsed>=self.times[-1]
         if terminated:reward-=1.
         self.previous_action=action
@@ -156,5 +169,6 @@ class ContactTrackingEnv(gym.Env):
             active_contact_targets=len(targets),unwanted_object_contact_bodies=int(unwanted),
             reference_time_s=float(self.start_time+self.elapsed),box_height_m=float(d.xpos[self.box,2]),
             physics_warning_count=warnings,
+            failure_reasons=failure_reasons,root_height_m=float(d.qpos[2]),root_up_cosine=tilt,
             terminated_by_tracking_failure=bool(terminated))
         return self._observation(),float(reward),bool(terminated),bool(truncated),info

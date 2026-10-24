@@ -30,6 +30,11 @@ def prepare_physics_scene(source,output):
     if option is None:option=ET.SubElement(root,'option')
     option.set('timestep','0.002');option.set('integrator','implicitfast')
     option.set('gravity','0 0 -9.81');option.set('iterations','50')
+    for geom in root.iter('geom'):
+        # MuJoCo combines equal-priority geom frictions using the maximum.
+        # Setting only the box would leave its default-1.0 robot counterpart in charge.
+        friction='.8 .01 .001' if geom.get('name')=='ground' else '.6 .01 .001'
+        geom.set('friction',friction)
     actuator=ET.SubElement(root,'actuator')
     for joint in root.iter('joint'):
         name=joint.get('name')

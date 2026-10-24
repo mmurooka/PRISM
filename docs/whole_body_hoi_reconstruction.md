@@ -187,3 +187,35 @@ feasibility baseline, not the official PRISM teacher recipe or a vision policy.
 fixed phases and saves actual simulated trajectories, failures and contact metrics.
 Training returns alone are not success rates. No output is authorized for direct
 robot execution by these scripts.
+
+The default PPO action uses a fraction of each motor's effort limit divided by
+its proportional gain, rather than the same angle offset for every joint.
+Robot/box friction is explicitly 0.6 and floor friction 0.8 (MuJoCo takes the
+maximum for equal-priority pairs). These are assumptions, not measurements.
+
+`--teacher-checkpoint` enables a residual around the released PRISM privileged
+actor. `released_teacher.py` checks the checkpoint's joint order, 178-dimensional
+observation contract and PD action semantics. Object coordinates are rotated from
+the reconstruction's width/height/thickness chart to the teacher's
+width/depth/height chart without changing physical geometry. The observation and
+actor parity script compares against the pinned upstream functions; passing it
+does not establish simulator equivalence or successful policy transfer. Residual
+means start at zero, and evaluations preserve actual failures.
+
+### Global temporal refinement
+
+`scripts/refine_robot_trajectory.py` jointly fits cubic-spline robot joints,
+floating base and box poses across all frames. It penalizes acceleration,
+stance drift, surface penetration, contact error and approximate support-polygon
+ZMP violations. The differentiable FK is checked against MuJoCo, including an
+offset hinge and its Jacobian. A fixed inner-hand proxy avoids framewise changes
+among finger helper meshes. Dynamics-only, non-unique contact hypotheses use a
+saturating loss; visual/geometric or individually necessary targets remain
+quadratic. Hand proxy normals and contact residuals are recorded explicitly.
+
+This remains a kinematic optimization: approximate ZMP omits centroidal angular
+momentum and vertical acceleration, and soft costs do not certify torque or
+contact-force feasibility. `smooth_contact_trajectory.py` is a diagnostic filter
+baseline; it remeasures collisions because smoothing alone can cause penetration.
+Neither output is safe for robot execution. Compare all residuals and physical
+rollouts before selecting a training reference.
