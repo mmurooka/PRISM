@@ -71,6 +71,10 @@ def main():
         difference=dict(qpos_max_abs=float(abs(cpu.qpos-gpu_q[0]).max()),qvel_max_abs=float(abs(cpu.qvel-gpu_v[0]).max()),
                         seconds=.02,cpu_time_s=float(cpu.time),gpu_time_s=float(gpu.time.numpy()[0]),
                         world_replicas_qpos_max_abs=float(abs(gpu_q-gpu_q[:1]).max()))
+        box_joint=mujoco.mj_name2id(model,mujoco.mjtObj.mjOBJ_JOINT,'hoi_box_free');box_q=int(model.jnt_qposadr[box_joint])
+        difference.update(root_position_m=float(np.linalg.norm(cpu.qpos[:3]-gpu_q[0,:3])),
+            box_position_m=float(np.linalg.norm(cpu.qpos[box_q:box_q+3]-gpu_q[0,box_q:box_q+3])),
+            hinge_angle_max_rad=float(abs(cpu.qpos[motor['qadr']]-gpu_q[0,motor['qadr']]).max()))
         started=time.perf_counter()
         for _ in range(args.control_steps):wp.capture_launch(capture.graph)
         wp.synchronize();elapsed=time.perf_counter()-started
