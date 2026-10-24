@@ -31,20 +31,30 @@ def contact_matrix(model, data, maximum_gap):
 
 def fit_required_force(required, contact_forces, motor_matrix, lower, upper, scale):
     """Fit forces with unilateral pyramids and signed bounded motor torques."""
-    matrix=np.column_stack((contact_forces,motor_matrix));nforce=contact_forces.shape[1]
-    bounds=(np.r_[np.zeros(nforce),lower],np.r_[np.full(nforce,np.inf),upper])
+    lower=np.asarray(lower);upper=np.asarray(upper)
+    if np.any(lower>upper):raise ValueError('Reversed torque interval')
+    fixed=np.isclose(lower,upper,rtol=0,atol=1e-10);variable=~fixed
+    fixed_torque=(lower[fixed]+upper[fixed])/2
+    fixed_force=motor_matrix[:,fixed]@fixed_torque
+    matrix=np.column_stack((contact_forces,motor_matrix[:,variable]));nforce=contact_forces.shape[1]
+    if matrix.shape[1]==0:
+        residual=fixed_force-required
+        return dict(residual=residual,normalized_residual=residual/scale,torques=(lower+upper)/2,
+            force_coefficients=np.zeros(0),solver_success=True,iterations=0)
+    bounds=(np.r_[np.zeros(nforce),lower[variable]],np.r_[np.full(nforce,np.inf),upper[variable]])
     weighted=matrix/np.asarray(scale)[:,None];target=required/scale
     # Tiny selection regularizer only resolves redundant force allocations.
     augmented=np.vstack((weighted,1e-7*np.eye(matrix.shape[1])))
-    answer=lsq_linear(augmented,np.r_[target,np.zeros(matrix.shape[1])],bounds=bounds,
+    answer=lsq_linear(augmented,np.r_[target-fixed_force/scale,np.zeros(matrix.shape[1])],bounds=bounds,
                      method='bvls',tol=1e-10,max_iter=500)
-    residual=matrix@answer.x-required
+    residual=matrix@answer.x+fixed_force-required
+    torques=np.empty(len(lower));torques[fixed]=fixed_torque;torques[variable]=answer.x[nforce:]
     return dict(residual=residual,normalized_residual=residual/scale,
-        torques=answer.x[nforce:],force_coefficients=answer.x[:nforce],
+        torques=torques,force_coefficients=answer.x[:nforce],
         solver_success=bool(answer.success),iterations=answer.nit)
 
 
-def audit_frame(model,data,qpos,qvel,qacc,maximum_gap):
+def audit_frame(model,data,qpos,qvel,qacc,maximum_gap,motor_bounds=None):
     data.qpos[:]=qpos;data.qvel[:]=qvel;mujoco.mj_forward(model,data)
     mass=np.zeros((model.nv,model.nv));mujoco.mj_fullM(model,mass,data.qM)
     required=mass@qacc+data.qfrc_bias-data.qfrc_passive
@@ -59,7 +69,8 @@ def audit_frame(model,data,qpos,qvel,qacc,maximum_gap):
     scale=np.ones(model.nv);scale[:3]=robot_weight;scale[3:6]=robot_weight*.3
     scale[box_v:box_v+3]=box_weight;scale[box_v+3:box_v+6]=box_weight*.3
     scale[motor_v]=np.maximum(abs(model.actuator_ctrlrange).max(1),1.)
-    result=fit_required_force(required,matrix,motor,model.actuator_ctrlrange[:,0],model.actuator_ctrlrange[:,1],scale)
+    lower,upper=(model.actuator_ctrlrange[:,0],model.actuator_ctrlrange[:,1]) if motor_bounds is None else motor_bounds
+    result=fit_required_force(required,matrix,motor,lower,upper,scale)
     result.update(required=required,contacts=contacts,robot_root_residual=float(np.linalg.norm(result['normalized_residual'][:6])),
         box_residual=float(np.linalg.norm(result['normalized_residual'][box_v:box_v+6])),
         motor_residual=float(np.max(abs(result['normalized_residual'][motor_v]))))

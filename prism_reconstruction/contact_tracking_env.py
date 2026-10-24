@@ -159,7 +159,8 @@ class ContactTrackingEnv(gym.Env):
             region_forces[name]=max(region_forces.get(name,0.),forces.get(int(m.body_weldid[target['robot_body_id']]),0.))
             region_gaps[name]=min(region_gaps.get(name,float('inf')),float(np.linalg.norm(robot_point-box_point)))
         effort=float(np.mean((d.ctrl/np.maximum(self.motor['upper'],1))**2))
-        action_rate=float(np.mean((action-self.previous_action)**2))
+        residual_units=self.teacher_residual_scale if self.teacher is not None else 1.
+        action_rate=float(np.mean((residual_units*(action-self.previous_action))**2))
         reward=.25*posture+.2*root+.3*object_tracking+.15*contact_position+.1*contact_force+.1
         reward-=.01*effort+.01*action_rate+.03*unwanted
         tilt=float(d.xmat[1].reshape(3,3)[2,2])

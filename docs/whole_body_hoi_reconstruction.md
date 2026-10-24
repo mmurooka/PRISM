@@ -242,6 +242,14 @@ applied-action standard deviation. Zero-residual rollouts are identical across
 scales; resuming with a different scale is rejected to avoid silently changing
 an existing policy's meaning.
 
+`scripts/audit_teacher_action_capacity.py` intersects motor limits with the
+instantaneous PD torque intervals reachable from each chosen residual range,
+then reruns the inverse-contact fit. This is stronger than comparing a single
+non-unique force allocation to action bounds. It still assumes reference states,
+reset previous actions, and the selected geometric tolerance; it is not a
+closed-loop reachability proof. Residual action-rate penalties use applied
+teacher-action units so changing the normalized range does not dilute them.
+
 `scripts/audit_robot_contact_dynamics.py` computes required generalized forces
 from the reference accelerations, mass matrix, bias and passive forces. It fits
 these with 29 bounded motor torques and unilateral eight-ray friction pyramids

@@ -31,6 +31,11 @@ class InverseContactAuditTests(unittest.TestCase):
         result=fit_required_force(np.array([3.,10.]),np.array([[0.],[1.]]),np.array([[1.],[0.]]),[-2.],[2.],np.ones(2))
         np.testing.assert_allclose(result['residual'],[-1.,0.],atol=1e-7)
         self.assertAlmostEqual(result['torques'][0],2.)
+        fixed=fit_required_force(np.array([3.,10.]),np.array([[0.],[1.]]),np.array([[1.],[0.]]),[2.],[2.],np.ones(2))
+        np.testing.assert_allclose(fixed['residual'],[-1.,0.],atol=1e-7)
+        self.assertEqual(fixed['torques'][0],2.)
+        unsupported=fit_required_force(np.array([3.,10.]),np.zeros((2,0)),np.eye(2),[2.,0.],[2.,0.],np.ones(2))
+        np.testing.assert_array_equal(unsupported['residual'],[-1.,-10.])
 
 
 if __name__=='__main__':unittest.main()
