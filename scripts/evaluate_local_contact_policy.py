@@ -80,6 +80,9 @@ def main():
                     and m['region_target_gap_m'][region]<.03 for m in selected])),
                 target_gap_median_m=float(np.median([m['region_target_gap_m'][region] for m in selected])))
         metadata=dict(schema='g1_unassisted_physics_rollout_v1',source_video_sha256=env.meta['source_video_sha256'],
+            reference=str(args.reference.resolve()),source_trajectory_sha256=hashlib.sha256((args.reference/'trajectory.npz').read_bytes()).hexdigest(),
+            training_reference=training_metadata.get('reference') if args.checkpoint else None,
+            reference_changed_from_training=bool(args.checkpoint and training_metadata.get('source_trajectory_sha256')!=hashlib.sha256((args.reference/'trajectory.npz').read_bytes()).hexdigest()),
             independent_diagnostic_frames=False,controller=('finetuned_PRISM_teacher' if policy_control=='teacher_absolute' else ('teacher_plus_residual_PPO' if teacher else 'residual_PPO')) if policy else ('released_PRISM_teacher' if teacher else 'zero_residual_PD'),
             action_mode=action_mode,
             teacher_residual_scale=residual_scale,

@@ -119,6 +119,7 @@ def main():
         physics_xml_sha256=hashlib.sha256(scene.read_bytes()).hexdigest(),
         physics_profile_changed_on_resume=bool(args.resume and source_meta.get('robot_urdf_sha256')!=(hashlib.sha256(args.robot_urdf.read_bytes()).hexdigest() if args.robot_urdf else None)),
         controller_changed_on_resume=bool(args.resume and source_meta.get('pd_gain_source','local')!=gain_source),
+        reference_changed_on_resume=bool(args.resume and source_meta.get('source_trajectory_sha256')!=hashlib.sha256((args.reference/'trajectory.npz').read_bytes()).hexdigest()),
         contact_reward_description=('Per-joint mean exponential tracking; linear-distance root/object shaping; '
             '0.25 approach + 0.5 position-times-normal-force contact guidance.' if args.contact_reward=='coupled'
             else 'Legacy narrow squared-error tracking with independent position and force-presence bonuses.'),
