@@ -48,6 +48,12 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
         raise ValueError('length_unit must explicitly be m; establish metric scale before contact inference')
     times, poses = data['timestamps_s'], data['world_from_object']
     vertices, scores = data['human_vertices_world'], data['contact_scores']
+    prior_code=data.get('contact_prior_evidence_code')
+    if prior_code is not None:
+        prior_code=np.asarray(prior_code)
+        if (prior_code.shape!=np.asarray(scores).shape or prior_code.dtype.kind not in 'ui' or
+                np.any(prior_code<0) or np.any(prior_code>3) or not np.array_equal(prior_code>0,np.asarray(scores)>0)):
+            raise ValueError('Invalid binary prior-source evidence codes')
     regions = np.asarray(data['human_vertex_regions'], dtype=str)
     half = np.asarray(data['box_half_extents'], float)
     contact = infer_contacts(vertices, poses, half, scores, regions, times, config)
@@ -134,6 +140,14 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
                   dynamics_group_names=np.asarray(list(SUPPORT_GROUPS)),dynamics_group_necessary=group_necessary,
                   contact_evidence_code=evidence_code,contact_candidates=evidence_code>0,
                   normalized_wrench_residual=residual, hand_only_wrench_residual=hand_only_residual)
+    if prior_code is not None:
+        arrays['contact_prior_evidence_code']=prior_code.astype(np.uint8)
+        metadata['prior_evidence_code_bits']={'1':'original binary InteractVLM proposal',
+                                            '2':'local language/image/geometry candidate proposal'}
+        metadata['evidence_code_bits']['1']='combined_binary_prior_and_geometric_contact'
+        for key in ('contact_prior_base_input_sha256','contact_prior_semantic_cues_sha256',
+                    'contact_prior_semantic_metadata_sha256','contact_prior_score_interpretation'):
+            metadata[key]=str(np.asarray(data[key]).item())
     if not np.isfinite(temporal_force_smoothness) or temporal_force_smoothness<0:
         raise ValueError('Temporal force smoothness must be finite and nonnegative')
     if temporal_force_smoothness:

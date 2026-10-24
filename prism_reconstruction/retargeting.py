@@ -88,6 +88,10 @@ def select_contact_targets(force_evidence,contact_arrays,metadata,policy='visual
                               one_force_explanation=explanatory),
                 weight=1. if visual else (.8 if individual else (.5 if group else .25)),
                 assignment_unique=False)
+            if 'contact_prior_evidence_code' in contact_arrays:
+                source_bits=np.asarray(contact_arrays['contact_prior_evidence_code'][frame,ids])[active[frame,ids]]
+                item['visual_prior_sources']=[name for bit,name in
+                    ((1,'interactvlm'),(2,'local_language_image_geometry')) if np.any(source_bits&bit)]
             modes=contact_arrays.get('mode')
             item['contact_mode']='unknown' if modes is None or not np.any(modes[frame,ids]) else (
                 'sticking' if np.mean(modes[frame,ids]==1)>.5 else 'sliding')

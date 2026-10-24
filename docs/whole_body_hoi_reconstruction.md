@@ -47,6 +47,27 @@ The synthetic demonstration intentionally gives the knee a low visual score and
 constructs a support phase that cannot be explained by hands alone. It verifies
 the computation under known conditions. It does not measure real-video accuracy.
 
+### Optional semantic candidate supplement
+
+CRISP's `infer_wholebody_contact_vlm.py` and `fuse_semantic_contact_cues.py` can
+provide a separate, uncalibrated language/image/geometry candidate archive.
+`scripts/augment_contact_prior.py --input BASE.npz --semantic-cues CUE_DIR
+--output NEW.npz` creates a binary union with the original InteractVLM masks.
+It requires a completed supplement matching the exact base-input hash, video,
+timestamps and vertex indexing; continuous scores are rejected rather than
+silently binarized. The original score array is retained, and source files are
+not overwritten. Rerun `reconstruct_whole_body_contacts.py` on the new archive.
+
+The additional array `contact_prior_evidence_code` records prior provenance:
+bit 1 is InteractVLM, bit 2 is the language/image/geometry supplement. This is
+**different from** `contact_evidence_code`, whose bits describe combined contact
+and dynamics evidence. Provenance survives the dynamics output and appears as
+`visual_prior_sources` on retargeting targets. Supplement-derived vertex masks
+are geometric candidates within mentioned regions, not learned vertex-level
+segmentation or calibrated probabilities. Adding them can also move the
+prior-weighted force-patch centroids, so new force fits must not be presented
+as the unchanged old fits with an extra visual label.
+
 ## Input archive contract
 
 All geometry must already share one metric world frame. Pose matrices map
