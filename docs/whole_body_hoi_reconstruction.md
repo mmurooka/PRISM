@@ -220,6 +220,18 @@ baseline; it remeasures collisions because smoothing alone can cause penetration
 Neither output is safe for robot execution. Compare all residuals and physical
 rollouts before selecting a training reference.
 
+The current default support objective differentiates total body momentum, using
+each link's principal inertia, angular momentum and vertical acceleration. It
+requires the resulting center of pressure to lie inside the stance-foot polygon,
+with positive vertical pressure and floor-friction capacity. This is still only
+a net-wrench condition; box-floor support is omitted conservatively, derivative
+boundaries are less accurate, and internal joint torques are not constrained by
+this objective. `--balance-model approximate` retains the simpler baseline.
+The default hand patch preserves source points; `--hand-patch inner` and
+`--hand-normal-weight` expose the stronger palm assumption rather than silently
+imposing it. Closest collision-surface planes additionally close visually supported
+hand/box gaps, which point-distance costs alone may leave open.
+
 `scripts/audit_robot_contact_dynamics.py` computes required generalized forces
 from the reference accelerations, mass matrix, bias and passive forces. It fits
 these with 29 bounded motor torques and unilateral eight-ray friction pyramids

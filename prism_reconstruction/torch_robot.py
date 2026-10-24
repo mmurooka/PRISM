@@ -62,3 +62,30 @@ class TorchRobot:
 def acceleration(values,dt):
     interior=(values[2:]-2*values[1:-1]+values[:-2])/dt**2
     return torch.cat((interior[:1],interior,interior[-1:]),dim=0)
+
+
+def velocity(values,dt):
+    return torch.cat(((values[1:2]-values[:1])/dt,
+        (values[2:]-values[:-2])/(2*dt),(values[-1:]-values[-2:-1])/dt),dim=0)
+
+
+def centroidal_contact_wrench(positions,rotations,masses,inertia,dt):
+    """Required external contact wrench about the fixed world origin.
+
+    Positions are body COMs; rotations map principal inertia axes to world.
+    This includes angular momentum and vertical acceleration, but does not
+    certify individual contact forces or motor torques. Boundary derivatives
+    have lower accuracy and must be reported as such.
+    """
+    linear_velocity=velocity(positions,dt)
+    angular_matrix=velocity(rotations,dt)@rotations.transpose(-1,-2)
+    omega=.5*torch.stack((angular_matrix[...,2,1]-angular_matrix[...,1,2],
+        angular_matrix[...,0,2]-angular_matrix[...,2,0],
+        angular_matrix[...,1,0]-angular_matrix[...,0,1]),dim=-1)
+    world_inertia=(rotations*inertia[None,:,None,:])@rotations.transpose(-1,-2)
+    angular_momentum=torch.cross(positions,masses[None,:,None]*linear_velocity,dim=-1)
+    angular_momentum+=(world_inertia@omega[...,None]).squeeze(-1)
+    gravity=torch.zeros_like(positions);gravity[...,2]=-9.81*masses[None,:]
+    force=(masses[None,:,None]*acceleration(positions,dt)-gravity).sum(1)
+    moment=velocity(angular_momentum.sum(1),dt)-torch.cross(positions,gravity,dim=-1).sum(1)
+    return force,moment

@@ -7,10 +7,24 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
-from prism_reconstruction.torch_robot import TorchRobot
+from prism_reconstruction.torch_robot import TorchRobot,centroidal_contact_wrench
 
 
 class TorchRobotTests(unittest.TestCase):
+    def test_contact_wrench_includes_translation_and_angular_acceleration(self):
+        time=torch.arange(101,dtype=torch.float64)*.001
+        positions=torch.zeros((len(time),1,3),dtype=torch.float64)
+        positions[:,0,0]=.5*2*time**2;positions[:,0,2]=1.
+        rotations=torch.eye(3,dtype=torch.float64).expand(len(time),1,3,3)
+        force,moment=centroidal_contact_wrench(positions,rotations,torch.tensor([3.]),torch.ones((1,3)),.001)
+        np.testing.assert_allclose(force[2:-2].numpy(),np.tile([6.,0.,29.43],(97,1)),atol=1e-7)
+        cop=-moment[2:-2,1]/force[2:-2,2]
+        np.testing.assert_allclose(cop.numpy(),positions[2:-2,0,0].numpy()-2/9.81,atol=1e-7)
+        positions.zero_();angle=.5*4*time.numpy()**2
+        rotations=torch.from_numpy(Rotation.from_euler('z',angle).as_matrix())[:,None]
+        force,moment=centroidal_contact_wrench(positions,rotations,torch.tensor([3.]),torch.tensor([[1.,1.,2.]]),.001)
+        np.testing.assert_allclose(moment[2:-2,2].numpy(),8.,atol=1e-5)
+
     def test_fk_and_gradient_match_mujoco_with_offset_hinge_and_rotated_link(self):
         model=mujoco.MjModel.from_xml_string('''<mujoco><worldbody>
           <body name="pelvis"><freejoint/><geom type="sphere" size=".1"/>
