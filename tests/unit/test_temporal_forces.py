@@ -8,6 +8,16 @@ from prism_reconstruction.temporal_forces import solve_force_sequence
 
 
 class TemporalForceTests(unittest.TestCase):
+    def test_conic_formulation_matches_iterative_least_squares(self):
+        t=np.arange(12)/30;wrench=np.tile([0,0,9.81,0,0,0],(12,1));wrench[:,2]+=.2*np.sin(np.arange(12))
+        candidates=[[ForceCandidate('support',np.zeros(3),np.array([0.,0,1.]),friction=.3)] for _ in t]
+        args=(candidates,wrench,np.zeros((12,3)),t,1.)
+        iterative=solve_force_sequence(*args,smoothness=.001,solver='lsmr')
+        conic=solve_force_sequence(*args,smoothness=.001,solver='clarabel')
+        np.testing.assert_allclose(conic['region_forces_world'],iterative['region_forces_world'],atol=3e-4,rtol=1e-5)
+        self.assertEqual(conic['solver_info']['status'],'Solved')
+        self.assertLess(conic['solver_info']['primal_residual'],1e-6)
+
     def test_smoothing_reduces_noisy_support_forces_and_reports_residual(self):
         t=np.arange(30)/30
         wrench=np.zeros((30,6)); wrench[:,2]=9.81+.25*(-1.)**np.arange(30)

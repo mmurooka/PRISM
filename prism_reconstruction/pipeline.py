@@ -40,7 +40,7 @@ def human_force_candidates(contact, scores, regions, pose, frame, config, fricti
 
 
 def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None,
-                         temporal_force_smoothness=0.0, smoothing_window_s=.20):
+                         temporal_force_smoothness=0.0, smoothing_window_s=.20, temporal_force_solver='lsmr'):
     for field in ('world_frame', 'scale_source', 'source_video_sha256', 'object_id'):
         if field not in data or not str(np.asarray(data[field]).item()).strip():
             raise ValueError(f'missing provenance field: {field}')
@@ -139,7 +139,7 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
     if temporal_force_smoothness:
         from .temporal_forces import solve_force_sequence
         sequence=solve_force_sequence(candidate_sequence,motion['wrench_world'],motion['com_world'],times,
-                                       length,smoothness=temporal_force_smoothness)
+                                       length,smoothness=temporal_force_smoothness,solver=temporal_force_solver)
         arrays.update(temporal_region_names=np.asarray([name[1] for name in sequence['region_names']]),
                       temporal_region_sources=np.asarray([name[0] for name in sequence['region_names']]),
                       temporal_region_forces_world=sequence['region_forces_world'],
@@ -150,6 +150,7 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
             for candidate,force in zip(frame['candidates'],forces):
                 candidate['temporal_force_world']=force.tolist()
         metadata['temporal_force_interpretation']='Smoothed explanatory forces; contact necessity remains the independent per-frame region-removal test.'
+        metadata['temporal_force_solver']=sequence['solver_info']
     return arrays, metadata, records
 
 

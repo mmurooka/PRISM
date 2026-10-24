@@ -356,3 +356,11 @@ only the side-face normal can rule out direct upward support. The combined cone
 is deliberately permissive and does not infer the true surface normal. Always
 compare with the exact-collision inverse-force audit and physical rollouts. This
 option changes proposed robot forces only, not the human contact evidence.
+
+For the full sequence, `--temporal-force-solver clarabel` solves the same
+nonnegative least-squares objective using explicit residual variables and sparse
+conic constraints, without forming `A.T @ A`. It records solver status, residuals,
+iterations and solve time, and has a 100-iteration budget. Small-problem agreement
+with the original iterative LSMR formulation is tested. The initial full-clip
+LSMR runs were stopped after exceeding 11 minutes; their interruption logs remain
+local. A faster solver does not strengthen contact identifiability.
