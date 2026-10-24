@@ -45,7 +45,7 @@ def transform_demonstration(joints_world,object_poses,half_extents,normal_world,
                 box_half_extents=np.asarray(half_extents).copy())
 
 
-def select_contact_targets(force_evidence,contact_arrays,metadata,policy='visual_or_necessary'):
+def select_contact_targets(force_evidence,contact_arrays,metadata,policy='visual_or_necessary',maximum_gap_m=.05):
     """One candidate patch per semantic region; retain the source uncertainty.
 
     Group-derived targets represent one feasible assignment, never unique
@@ -56,7 +56,7 @@ def select_contact_targets(force_evidence,contact_arrays,metadata,policy='visual
     active=contact_arrays['active'];poses=contact_arrays['world_from_object']
     if len(force_evidence)!=len(active) or len(poses)!=len(active):raise ValueError('Contact evidence frames do not align')
     groups=metadata.get('support_groups',{})
-    output=[]
+    output=[];previous_points={}
     for frame,record in enumerate(force_evidence):
         if record.get('frame',frame)!=frame:raise ValueError('Contact evidence was reordered')
         selected={}
@@ -73,13 +73,25 @@ def select_contact_targets(force_evidence,contact_arrays,metadata,policy='visual
             explanatory=bool(candidate['explanatory'])
             eligible=visual or individual or group or (policy=='all_explanatory' and explanatory)
             if not eligible:continue
-            rank=(visual,individual,group,visual_count,float(np.linalg.norm(candidate['force_world'])))
+            if 'signed_gap_m' in contact_arrays:
+                close=np.abs(contact_arrays['signed_gap_m'][frame,ids])<=maximum_gap_m
+                if close.sum()<metadata['contact_config']['min_region_vertices']:continue
+            previous=previous_points.get(region)
+            continuity=0. if previous is None or previous[0]!=frame-1 else -float(np.linalg.norm(
+                np.asarray(candidate['point_object'])-previous[1]))
+            # A nonunique force allocation must not arbitrarily switch the
+            # transferred patch between adjacent cuboid faces every frame.
+            rank=(visual,individual,group,continuity,visual_count,float(np.linalg.norm(candidate['force_world'])))
             item=dict(region=region,point_object=candidate['point_object'],
                 outward_normal_object=(-poses[frame,:3,:3].T@np.asarray(candidate['normal_world'])).tolist(),
                 evidence=dict(visual_geometric=visual,individual_necessity=individual,group_assignment=group,
                               one_force_explanation=explanatory),
                 weight=1. if visual else (.8 if individual else (.5 if group else .25)),
                 assignment_unique=False)
+            modes=contact_arrays.get('mode')
+            item['contact_mode']='unknown' if modes is None or not np.any(modes[frame,ids]) else (
+                'sticking' if np.mean(modes[frame,ids]==1)>.5 else 'sliding')
             if region not in selected or rank>selected[region][0]:selected[region]=(rank,item)
         output.append([value[1] for value in selected.values()])
+        for item in output[-1]:previous_points[item['region']]=(frame,np.asarray(item['point_object']))
     return output

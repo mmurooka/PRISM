@@ -124,3 +124,37 @@ infeasible contacts. Geometric IK must be evaluated separately from dynamic
 feasibility. RL should preserve intended contacts while still distinguishing unwanted
 collisions; hand-only and full-body reward variants need controlled comparisons.
 Simulation success alone is not sim2real contact reproduction evidence.
+
+### Local geometric baseline
+
+`scripts/retarget_whole_body_contacts.py` implements an independent MuJoCo/CLARABEL
+baseline for the fixed-hand 29-DoF G1. It uses floor-aligned coordinates, leg-length
+motion scaling, unchanged physical box dimensions, joint bounds, soft object-local
+contact targets, observed foot-stance anchors and joint robot/object pose updates.
+Quaternions are integrated in generalized-velocity coordinates. Collision queries
+are supplemented by analytic cuboid distances on sampled robot surfaces and all
+eight box corners. A nonlinear merit check limits collision-increasing steps.
+The solver records residuals, violations and stalled iterations; QP success alone
+is not convergence or dynamic feasibility. Near kinematic neighbours are excluded
+from self-collision checks. The canonical robot XML is an explicit input, and is
+not modified in place.
+
+Example from the CRISP environment (all outputs must be ignored):
+
+```bash
+.venv/bin/python ../PRISM/scripts/retarget_whole_body_contacts.py \
+  --human results/sequence/human.npz --object results/sequence/box.npz \
+  --contacts results/sequence/contacts --robot-xml /path/to/g1_29dof.xml \
+  --output results/sequence/g1_ik --policy all_explanatory
+```
+
+`--warm-start` accepts an existing matching full trajectory for a separate
+collision-refinement pass. Hand-only and full-body variants use the same solver.
+Robot patches persist only for estimated sticking contacts; uncertain or sliding
+contacts may reassign a robot surface point. Proximal/distal thigh coordinates are
+transferred from the SMPL template instead of mapping every thigh patch to the knee.
+
+`scripts/evaluate_contact_sensitivity.py` reruns contact force inference over an
+explicit friction/smoothing grid. Its selection fractions measure stability over
+those assumptions, not calibrated contact probabilities. It does not account for
+all shape, inertia or camera uncertainty.

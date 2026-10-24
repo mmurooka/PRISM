@@ -40,5 +40,17 @@ class RetargetingConventionsTests(unittest.TestCase):
         self.assertEqual(result['weight'],.5)
         self.assertEqual(select_contact_targets(records,data,meta,'hands_only'),[[]])
 
+    def test_nonunique_force_change_does_not_jump_object_face(self):
+        base=dict(source='human',region='right_thigh',vertex_ids=[0,1,2],necessary=False,
+            explanatory=True,normal_world=[0,0,1])
+        a=dict(**base,point_object=[0,0,-.5],force_world=[0,0,2.])
+        b=dict(**base,point_object=[.2,0,-.3],force_world=[0,0,1.])
+        records=[dict(candidates=[a,b]),dict(candidates=[dict(a),dict(b,force_world=[0,0,20.])])]
+        data=dict(active=np.zeros((2,3),bool),world_from_object=np.tile(np.eye(4),(2,1,1)))
+        meta=dict(support_groups={},contact_config={'min_region_vertices':3})
+        result=select_contact_targets(records,data,meta,'all_explanatory')
+        self.assertEqual(result[0][0]['point_object'],result[1][0]['point_object'])
+        self.assertFalse(result[1][0]['assignment_unique'])
+
 
 if __name__=='__main__':unittest.main()
