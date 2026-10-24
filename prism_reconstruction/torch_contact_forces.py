@@ -30,8 +30,10 @@ def frame_sum(values,frames,count):
     return torch.zeros((count,*values.shape[1:]),device=values.device,dtype=values.dtype).index_add(0,frames,values)
 
 
-def normalized_wrench_error(actual,required,weight,length=.3):
-    return ((actual[0]-required[0])/weight).square().mean()+((actual[1]-required[1])/(weight*length)).square().mean()
+def normalized_wrench_error(actual,required,weight,length=.3,center=None):
+    force=actual[0]-required[0];moment=actual[1]-required[1]
+    if center is not None:moment=moment-torch.cross(center,force,dim=-1)
+    return (force/weight).square().mean()+(moment/(weight*length)).square().mean()
 
 
 class ContactWrenchProposal(torch.nn.Module):
@@ -54,7 +56,7 @@ class ContactWrenchProposal(torch.nn.Module):
         with torch.no_grad():
             for parameter in self.parameters():parameter.clamp_(min=0.)
 
-    def forward(self,robot_points,object_points,box,box_rotation,feet,required_robot,required_box):
+    def forward(self,robot_points,object_points,box,box_rotation,feet,required_robot,required_box,robot_com=None):
         cf=self.frames
         local=torch.einsum('nr,nrj->nj',self.robot_object,self.object_rays)*self.box_weight
         object_forces=torch.einsum('nij,nj->ni',box_rotation[cf],local)
@@ -67,8 +69,8 @@ class ContactWrenchProposal(torch.nn.Module):
         box_wrench=wrench(ground_points,ground_forces)
         box_wrench=(box_wrench[0]+frame_sum(object_forces,cf,self.count),
             box_wrench[1]+frame_sum(torch.cross(object_points,object_forces,dim=-1),cf,self.count))
-        balance=normalized_wrench_error(robot_wrench,required_robot,self.robot_weight)
-        balance+=normalized_wrench_error(box_wrench,required_box,self.box_weight)
+        balance=normalized_wrench_error(robot_wrench,required_robot,self.robot_weight,center=robot_com)
+        balance+=normalized_wrench_error(box_wrench,required_box,self.box_weight,center=box)
         load=self.robot_object.sum(-1)
         gap=(robot_points-object_points).square().sum(-1)
         complementarity=(load.square()*gap/.005**2).mean()

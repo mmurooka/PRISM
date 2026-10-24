@@ -233,7 +233,8 @@ def main():
             required_robot=centroidal_contact_wrench(centers[:,robot_bodies],principal[:,robot_bodies],masses[robot_bodies],inertia[robot_bodies],dt)
             b=solver.box_body
             required_box=centroidal_contact_wrench(centers[:,b:b+1],principal[:,b:b+1],masses[b:b+1],inertia[b:b+1],dt)
-            contact_wrench,wrench_parts=proposal(robot_contact,object_contact,box,Rbox,foot,required_robot,required_box)
+            robot_com=(centers[:,robot_bodies]*masses[robot_bodies][None,:,None]).sum(1)/masses[robot_bodies].sum()
+            contact_wrench,wrench_parts=proposal(robot_contact,object_contact,box,Rbox,foot,required_robot,required_box,robot_com)
         loss=prior+smooth+10*contact+args.hand_normal_weight*normal_loss+15*foot_loss+100*penetration+100*ground+30*object_floor+args.balance_weight*balance+100*self_loss+args.hand_closure_weight*closure_loss+args.contact_wrench_weight*contact_wrench
         if not torch.isfinite(loss):raise FloatingPointError('Nonfinite global trajectory loss')
         value=float(loss.detach())
@@ -291,7 +292,7 @@ def main():
             hand_surface_closure='Optional cuboid SDF gap at nearest sampled hand surface; recomputed every gradient iteration.',
             hand_closure_weight=args.hand_closure_weight,
             contact_wrench_weight=args.contact_wrench_weight,
-            contact_wrench_assumptions='Optional projected nonnegative eight-ray forces, robot and box centroidal balance, force-gap products. Object friction 0.6, floor 0.8. No joint-torque, no-slip or exact collision-manifold guarantee. Proposed forces are not measured.',
+            contact_wrench_assumptions='Optional projected nonnegative eight-ray forces, robot and box centroidal balance about their COMs, force-gap products. Object friction 0.6, floor 0.8. No joint-torque, no-slip or exact collision-manifold guarantee. Proposed forces are not measured.',
             collision_samples_per_body=96,collision_plane_refresh_iterations=50,
             collision_planes='Near robot/object and non-adjacent self-collision pairs from MuJoCo.'),
         derivatives_before=derivative_summary(m,original,times),derivatives_after=derivative_summary(m,q,times),
@@ -313,7 +314,8 @@ def main():
             rp=torch.einsum('nij,nj->ni',rotations[cf,cb],cr)+positions[cf,cb]
             op=torch.einsum('nij,nj->ni',Rbox[cf],co)+box[cf]
             foot=torch.einsum('tsij,vj->tsvi',rotations[:,feet],foot_local)+positions[:,feet,None]
-            _,parts=proposal(rp,op,box,Rbox,foot,required_robot,required_box)
+            robot_com=(centers[:,robot_bodies]*masses[robot_bodies][None,:,None]).sum(1)/masses[robot_bodies].sum()
+            _,parts=proposal(rp,op,box,Rbox,foot,required_robot,required_box,robot_com)
             np.savez_compressed(args.output/'proposed_contact_forces.npz',frame_indices=cf.cpu().numpy(),
                 robot_body_ids=cb.cpu().numpy(),robot_points=rp.cpu().numpy(),object_points=op.cpu().numpy(),
                 **{key:parts[key].cpu().numpy() for key in ('object_forces','foot_forces','box_ground_forces')})

@@ -3,9 +3,20 @@ from pathlib import Path
 import unittest
 import torch
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
-from prism_reconstruction.torch_contact_forces import friction_rays,wrench,frame_sum,ContactWrenchProposal
+from prism_reconstruction.torch_contact_forces import friction_rays,wrench,frame_sum,ContactWrenchProposal,normalized_wrench_error
 
 class ContactForceTests(unittest.TestCase):
+    def test_wrench_residual_is_invariant_to_world_origin(self):
+        torch.manual_seed(19)
+        actual=(torch.randn(5,3,dtype=torch.float64),torch.randn(5,3,dtype=torch.float64))
+        required=(torch.randn(5,3,dtype=torch.float64),torch.randn(5,3,dtype=torch.float64))
+        center=torch.randn(5,3,dtype=torch.float64);offset=torch.tensor([13.,-7.,21.],dtype=torch.float64).expand(5,3)
+        before=normalized_wrench_error(actual,required,100.,center=center)
+        moved_actual=(actual[0],actual[1]+torch.cross(offset,actual[0],dim=-1))
+        moved_required=(required[0],required[1]+torch.cross(offset,required[0],dim=-1))
+        after=normalized_wrench_error(moved_actual,moved_required,100.,center=center+offset)
+        torch.testing.assert_close(before,after,rtol=1e-12,atol=1e-12)
+
     def test_static_floor_support_has_zero_wrench_error(self):
         dtype=torch.float64;cf=torch.arange(3);n=torch.tensor([[1.,0,0]]*3,dtype=dtype)
         module=ContactWrenchProposal(cf,3,n,torch.ones(3,2,dtype=torch.bool),torch.ones(3,dtype=dtype),torch.ones(3,dtype=dtype)*.2,10.,1.,'cpu',dtype)
