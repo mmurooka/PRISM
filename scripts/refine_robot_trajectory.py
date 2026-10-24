@@ -21,6 +21,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from prism_reconstruction.contact_ik import ContactIK,point_jacobian,distance_jacobian
 from prism_reconstruction.torch_robot import TorchRobot,rotation_6d,matrix_6d,acceleration,centroidal_contact_wrench
 from prism_reconstruction.torch_contact_forces import ContactWrenchProposal
+from prism_reconstruction.contact_group_objective import alternative_patch_loss
 from smooth_contact_trajectory import derivative_summary
 
 
@@ -37,14 +38,18 @@ def main():
     parser.add_argument('--hand-normal-weight',type=float,default=0.)
     parser.add_argument('--hand-closure-weight',type=float,default=0.)
     parser.add_argument('--contact-wrench-weight',type=float,default=0.)
+    parser.add_argument('--contact-group',nargs='+',default=[],help='Optional task-priority region alternatives; does not change source contact evidence')
+    parser.add_argument('--contact-group-weight',type=float,default=0.)
     parser.add_argument('--edge-contact-cones',action='store_true',help='Allow adjacent-face force cones at cuboid edges; still requires collision audit')
     args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
     if args.iterations<1:raise ValueError('Positive iteration count required')
+    if not np.isfinite(args.contact_group_weight) or args.contact_group_weight<0:raise ValueError('Nonnegative finite group weight required')
+    if args.contact_group_weight and not args.contact_group:raise ValueError('Positive group weight requires regions')
     if args.edge_contact_cones and args.contact_wrench_weight<=0:raise ValueError('Edge force cones require contact-wrench optimization')
     torch.set_num_threads(1);started=time.time();code_sha=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     dependency_sha={name:hashlib.sha256((Path(__file__).resolve().parents[1]/'prism_reconstruction'/name).read_bytes()).hexdigest()
-        for name in ('torch_robot.py','contact_ik.py','torch_contact_forces.py')}
+        for name in ('torch_robot.py','contact_ik.py','torch_contact_forces.py','contact_group_objective.py')}
     with np.load(args.input/'trajectory.npz') as a:arrays=dict(a)
     records=json.loads((args.input/'diagnostics.json').read_text());meta=json.loads((args.input/'metadata.json').read_text())
     solver=ContactIK(args.input/'scene.xml');m,d=solver.model,solver.data
@@ -80,7 +85,7 @@ def main():
         sample_bodies.extend([body]*len(chosen));sample_points.extend(points[chosen])
     sample_bodies=torch.tensor(sample_bodies,device=args.device);sample_points=tensor(np.array(sample_points))
     contact_frames=[];contact_bodies=[];contact_robot=[];contact_object=[];contact_weights=[];contact_reliable=[]
-    hand_normals=[];hand_mask=[];object_normals=[]
+    hand_normals=[];hand_mask=[];object_normals=[];contact_regions=[]
     palm_proxies={}
     for side,sign in (('left',-1.),('right',1.)):
         body=mujoco.mj_name2id(m,mujoco.mjtObj.mjOBJ_BODY,side+'_rubber_hand_link')
@@ -103,6 +108,9 @@ def main():
             contact_reliable.append(target['evidence']['visual_geometric'] or target['evidence']['individual_necessity'])
             hand_mask.append(is_hand);hand_normals.append(target.get('robot_normal_local',[0.,0.,1.]))
             object_normals.append(target['outward_normal_object'])
+            contact_regions.append(target['region'])
+    if set(args.contact_group)-set(contact_regions):raise ValueError('Requested contact group has regions absent from source targets')
+    priority_mask=torch.tensor([name in args.contact_group for name in contact_regions],device=args.device)
     cf=torch.tensor(contact_frames,device=args.device);cb=torch.tensor(contact_bodies,device=args.device)
     cr=tensor(contact_robot);co=tensor(contact_object);cw=tensor(contact_weights)
     reliable=torch.tensor(contact_reliable,device=args.device);hand_mask=tensor(hand_mask)
@@ -190,6 +198,7 @@ def main():
         # really touches. Saturate unsupported distant hypotheses instead of
         # bending the robot to satisfy all of them simultaneously.
         contact=(torch.where(reliable,squared,2*squared/(2+squared))*cw).sum()/cw.sum()
+        group_loss=alternative_patch_loss(squared*.03**2,cf,priority_mask) if args.contact_group_weight else squared.sum()*0
         robot_normal=torch.einsum('nij,nj->ni',rotations[cf,cb],hand_normals)
         object_normal=torch.einsum('nij,nj->ni',Rbox[cf],object_normals)
         normal_loss=((robot_normal+object_normal).square().sum(-1)*hand_mask).sum()/hand_mask.sum().clamp_min(1)
@@ -238,7 +247,7 @@ def main():
             required_box=centroidal_contact_wrench(centers[:,b:b+1],principal[:,b:b+1],masses[b:b+1],inertia[b:b+1],dt)
             robot_com=(centers[:,robot_bodies]*masses[robot_bodies][None,:,None]).sum(1)/masses[robot_bodies].sum()
             contact_wrench,wrench_parts=proposal(robot_contact,object_contact,box,Rbox,foot,required_robot,required_box,robot_com)
-        loss=prior+smooth+10*contact+args.hand_normal_weight*normal_loss+15*foot_loss+100*penetration+100*ground+30*object_floor+args.balance_weight*balance+100*self_loss+args.hand_closure_weight*closure_loss+args.contact_wrench_weight*contact_wrench
+        loss=prior+smooth+10*contact+args.hand_normal_weight*normal_loss+15*foot_loss+100*penetration+100*ground+30*object_floor+args.balance_weight*balance+100*self_loss+args.hand_closure_weight*closure_loss+args.contact_wrench_weight*contact_wrench+args.contact_group_weight*group_loss
         if not torch.isfinite(loss):raise FloatingPointError('Nonfinite global trajectory loss')
         value=float(loss.detach())
         if value<best_loss:best_loss=value;best=[parameter.detach().clone() for parameter in optimization_parameters]
@@ -250,6 +259,7 @@ def main():
             hand_normal=float(normal_loss.detach()),
             hand_surface_closure=float(closure_loss.detach()),
             contact_wrench=float(contact_wrench.detach()),
+            contact_group=float(group_loss.detach()),
             proposed_wrench_balance=float(wrench_parts['balance'].detach()) if wrench_parts else None,
             proposed_force_gap=float(wrench_parts['force_gap'].detach()) if wrench_parts else None,
             object_floor=float(object_floor.detach()),balance=float(balance.detach()),self_collision=float(self_loss.detach()))
@@ -295,6 +305,8 @@ def main():
             hand_surface_closure='Optional cuboid SDF gap at nearest sampled hand surface; recomputed every gradient iteration.',
             hand_closure_weight=args.hand_closure_weight,
             contact_wrench_weight=args.contact_wrench_weight,
+            contact_group=args.contact_group,contact_group_weight=args.contact_group_weight,
+            contact_group_interpretation='Optional supplied task priority: nearest selected semantic patch per existing active frame, quadratic distance at 5 mm scale. No source evidence, target weights or active frames are relabeled.',
             edge_contact_cones=args.edge_contact_cones,
             edge_cone_interpretation='Optional sum of adjacent-face friction cones within 2 mm of a cuboid edge. A permissive normal-cone proposal; not an identified contact normal.',
             contact_wrench_assumptions='Optional projected nonnegative eight-ray forces, robot and box centroidal balance about their COMs, force-gap products. Object friction 0.6, floor 0.8. No joint-torque, no-slip or exact collision-manifold guarantee. Proposed forces are not measured.',

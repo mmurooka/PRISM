@@ -377,6 +377,16 @@ with the same initialization, sampling and budget; do not report it as an
 unsupervised recognition improvement. Evaluations also record the longest
 continuous interval with force >1 N and target gap <3 cm for each region.
 
+Geometric refinement also accepts `--contact-group right_thigh
+--contact-group-weight 10`. Here the term is the mean squared distance of the
+closest selected patch per active frame, normalized by 5 mm. It prevents a
+task-relevant but uncertain target from being discarded by the saturating
+geometric penalty. This is an explicit task prior, not extra perception evidence.
+Target confidence, active frames and object contact locations are preserved.
+Check penetration, acceleration, inverse-force feasibility and unassisted
+rollouts before selecting a new reference; closing a geometric gap alone is not
+a physical contact demonstration.
+
 `--temporal-force-solver clarabel_constrained` instead minimizes force variation
 and force magnitude subject to a per-frame normalized wrench residual cap of
 `max(0.08, independent_fit_residual)`. A `1e-6` numerical feasibility allowance is
