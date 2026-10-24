@@ -51,7 +51,7 @@ def main():
         action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale,
         contact_reward=contact_reward,policy_control=policy_control,pd_gain_source=gain_source,
         contact_group=contact_group,contact_group_weight=contact_group_weight,
-        inverse_torque_reference=inverse_path)
+        inverse_torque_reference=inverse_path,record_contact_details=True)
     policy=None
     if args.checkpoint:
         from stable_baselines3 import PPO
@@ -92,6 +92,9 @@ def main():
             successes=np.array([m['region_object_contact_force_n'].get(region,0.)>1. and m['region_target_gap_m'].get(region,float('inf'))<.03 for m in metrics])
             changes=np.diff(np.r_[False,successes,False].astype(int));starts=np.flatnonzero(changes==1);ends=np.flatnonzero(changes==-1)
             summary['regions'][region]['longest_force_and_gap_contact_s']=float(max(ends-starts,default=0)*env.control_dt)
+            present=np.array([m['region_object_contact_force_n'].get(region,0.)>1. for m in metrics])
+            changes=np.diff(np.r_[False,present,False].astype(int));starts=np.flatnonzero(changes==1);ends=np.flatnonzero(changes==-1)
+            summary['regions'][region]['longest_force_contact_s']=float(max(ends-starts,default=0)*env.control_dt)
         metadata=dict(schema='g1_unassisted_physics_rollout_v1',source_video_sha256=env.meta['source_video_sha256'],
             reference=str(args.reference.resolve()),source_trajectory_sha256=hashlib.sha256((args.reference/'trajectory.npz').read_bytes()).hexdigest(),
             training_reference=training_metadata.get('reference') if args.checkpoint else None,
@@ -107,7 +110,8 @@ def main():
             physics_profile=json.loads(args.physics_scene.with_suffix('.profile.json').read_text()) if args.physics_scene.with_suffix('.profile.json').exists() else None,
             teacher_checkpoint_sha256=env.teacher.sha256 if env.teacher is not None else None,
             evaluation_code_sha256={path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in
-                (Path(__file__),Path(__file__).resolve().parents[1]/'prism_reconstruction/contact_tracking_env.py')},
+                (Path(__file__),Path(__file__).resolve().parents[1]/'prism_reconstruction/contact_tracking_env.py',
+                 Path(__file__).resolve().parents[1]/'prism_reconstruction/reference_control.py')},
             checkpoint_sha256=hashlib.sha256(args.checkpoint.read_bytes()).hexdigest() if args.checkpoint else None,
             robot_root_assistance=False,object_assistance=False,object_mass_kg=float(env.model.body_mass[env.box]),
             safe_for_robot_execution=False,**summary)

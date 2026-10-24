@@ -406,6 +406,14 @@ within 6e-14 in the first physical step, but roundoff grows in contact-sensitive
 rollouts (one start differed by 0.26 s in termination). Do not assert exact
 long-rollout parity or robust performance from one deterministic diagnostic.
 
+Evaluation records both continuous semantic-body force contact and the stricter
+force-plus-target-location duration. It also stores each physical box contact's
+object-local position and world-frame force on the box, including floor contacts.
+These details are disabled during training. On 61 evaluated simulation states,
+the recorded vectors balanced the box Newton equation within 3e-13 N; enabling
+recording left all five deterministic trajectories bitwise unchanged. This checks
+the simulated force sign and bookkeeping, not the accuracy of human force inference.
+
 `--temporal-force-solver clarabel_constrained` instead minimizes force variation
 and force magnitude subject to a per-frame normalized wrench residual cap of
 `max(0.08, independent_fit_residual)`. A `1e-6` numerical feasibility allowance is
