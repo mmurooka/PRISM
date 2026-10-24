@@ -45,6 +45,7 @@ def main():
     parser.add_argument('--contact-reward',choices=('additive','coupled'),default='coupled')
     parser.add_argument('--policy-control',choices=('residual','teacher_absolute'),default='residual')
     parser.add_argument('--pd-gain-source',choices=('auto','local','checkpoint'),default='auto')
+    parser.add_argument('--robot-urdf',type=Path,help='Optional pinned source for inertial groups and effort limits')
     args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
     if args.steps<1 or args.envs<1:raise ValueError('Positive training budget and environment count required')
@@ -54,12 +55,12 @@ def main():
     args.output.mkdir(parents=True)
     source_root=Path(__file__).resolve().parents[1]
     code_names=('prism_reconstruction/contact_tracking_env.py','prism_reconstruction/robot_physics.py',
-                'prism_reconstruction/released_teacher.py','prism_reconstruction/teacher_finetune.py',
+                'prism_reconstruction/released_teacher.py','prism_reconstruction/teacher_finetune.py','prism_reconstruction/robot_model_profile.py',
                 'scripts/train_local_contact_policy.py')
     for name in code_names:
         destination=args.output/'code_snapshot'/name;destination.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(source_root/name,destination)
-    scene=prepare_physics_scene(args.reference/'scene.xml',args.output/'physics.xml')
+    scene=prepare_physics_scene(args.reference/'scene.xml',args.output/'physics.xml',args.robot_urdf)
     import torch
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -113,6 +114,10 @@ def main():
         contact_reward=args.contact_reward,
         policy_control=args.policy_control,
         pd_gain_source=gain_source,pd_gains={key:applied_motor[key].tolist() for key in ('kp','kd')},
+        robot_urdf=str(args.robot_urdf.resolve()) if args.robot_urdf else None,
+        robot_urdf_sha256=hashlib.sha256(args.robot_urdf.read_bytes()).hexdigest() if args.robot_urdf else None,
+        physics_xml_sha256=hashlib.sha256(scene.read_bytes()).hexdigest(),
+        physics_profile_changed_on_resume=bool(args.resume and source_meta.get('robot_urdf_sha256')!=(hashlib.sha256(args.robot_urdf.read_bytes()).hexdigest() if args.robot_urdf else None)),
         controller_changed_on_resume=bool(args.resume and source_meta.get('pd_gain_source','local')!=gain_source),
         contact_reward_description=('Per-joint mean exponential tracking; linear-distance root/object shaping; '
             '0.25 approach + 0.5 position-times-normal-force contact guidance.' if args.contact_reward=='coupled'

@@ -316,3 +316,12 @@ This is a necessary-condition refinement, not inverse dynamics certification:
 joint torque limits, no-slip and exact collision-manifold consistency still need
 independent checks. In particular, uncertain source hypotheses are not converted
 into measured contact labels by a successful force fit.
+
+`train_local_contact_policy.py --robot-urdf <pinned g1_29dof.urdf>` additionally
+uses the training asset's aggregated articulated inertias and effort limits.
+Fixed child masses are counted once. Joint frames, collision geometry, reference
+points and the simulator remain local. Source SHA and a `.profile.json` manifest
+record this assumption. The previous retargeting asset has 35.525 kg robot mass;
+the pinned training URDF has 33.343 kg. Correcting this discrepancy does not by
+itself establish successful teacher transfer. Runs without this option retain
+the old physical model for reproducibility.

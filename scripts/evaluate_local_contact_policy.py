@@ -86,6 +86,8 @@ def main():
             contact_reward=contact_reward,
             policy_control=policy_control,
             pd_gain_source=gain_source,pd_gains={key:env.motor[key].tolist() for key in ('kp','kd')},
+            physics_xml_sha256=hashlib.sha256(args.physics_scene.read_bytes()).hexdigest(),
+            physics_profile=json.loads(args.physics_scene.with_suffix('.profile.json').read_text()) if args.physics_scene.with_suffix('.profile.json').exists() else None,
             teacher_checkpoint_sha256=env.teacher.sha256 if env.teacher is not None else None,
             evaluation_code_sha256={path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in
                 (Path(__file__),Path(__file__).resolve().parents[1]/'prism_reconstruction/contact_tracking_env.py')},

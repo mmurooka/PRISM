@@ -1,6 +1,7 @@
 """Explicit local G1 actuation assumptions for simulation-only evaluation."""
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import json
 
 import mujoco
 import numpy as np
@@ -23,7 +24,7 @@ def motor_armature(name):
     return ARMATURE[key]
 
 
-def prepare_physics_scene(source,output):
+def prepare_physics_scene(source,output,robot_urdf=None):
     """Add torque motors; retain free robot/box, gravity and physical contacts."""
     source=Path(source);output=Path(output)
     if output.exists():raise FileExistsError(output)
@@ -66,7 +67,12 @@ def prepare_physics_scene(source,output):
             if distance<=5:
                 ET.SubElement(contact,'exclude',body1=mujoco.mj_id2name(model,mujoco.mjtObj.mjOBJ_BODY,first),
                     body2=mujoco.mj_id2name(model,mujoco.mjtObj.mjOBJ_BODY,second))
+    profile=None
+    if robot_urdf is not None:
+        from .robot_model_profile import apply_urdf_profile
+        profile=apply_urdf_profile(root,model,robot_urdf)
     output.parent.mkdir(parents=True,exist_ok=True);ET.ElementTree(root).write(output)
+    if profile is not None:output.with_suffix('.profile.json').write_text(json.dumps(profile,indent=2))
     return output
 
 
