@@ -100,6 +100,7 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
                     interpretation='Explanatory forces and model-conditional necessity, not measured forces or uniquely identified contacts.',
                     intervals=contact.pop('intervals'))
     metadata.update({k:str(np.asarray(data[k]).item()) for k in ('world_frame','scale_source','source_video_sha256','object_id')})
+    metadata['contact_prior_source']=str(np.asarray(data.get('contact_prior_source','provided_unspecified')).item())
     arrays = dict(**contact, **motion, timestamps_s=times, world_from_object=poses, box_half_extents=half,
                   human_vertex_regions=regions, dynamics_possible=possible, dynamics_necessary=necessary,
                   normalized_wrench_residual=residual, hand_only_wrench_residual=hand_only_residual)

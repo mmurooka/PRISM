@@ -142,6 +142,12 @@ def solve_contact_forces(candidates, wrench_world, com_world, characteristic_len
         else:
             a_fit, b_fit = a, target
         result = lsq_linear(a_fit, b_fit, bounds=(0, np.inf), tol=1e-10, max_iter=200)
+        if not result.success:
+            # Region-removal fits are often underdetermined (six wrench rows,
+            # many redundant friction rays). TRF can stall at a near-boundary
+            # solution; BVLS solves the same convex problem with an active set.
+            result = lsq_linear(a_fit, b_fit, bounds=(0, np.inf), method='bvls',
+                                tol=1e-10, max_iter=1000)
         if not result.success or not np.isfinite(result.x).all():
             raise RuntimeError(f"contact force solve failed: {result.message}")
         return result.x, np.linalg.norm(a @ result.x-target)/normalizer
