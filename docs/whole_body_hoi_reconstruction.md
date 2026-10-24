@@ -265,6 +265,14 @@ a few wrist joints start far from the reference. Comparisons to the legacy
 recipe therefore change the shaping package, not only one reward coefficient;
 hand-only versus whole-body comparisons within a recipe remain matched.
 
+`scripts/benchmark_contact_warp.py` is an optional backend diagnostic using the
+pinned runtime's MuJoCo-Warp revision. It reports actual-model throughput,
+short-step CPU/GPU differences, buffer capacities and finite-state checks.
+Its fixed-target PD trajectory is not a tracking experiment. Keep the Warp
+dependencies in a separate environment: changing the main MuJoCo version would
+invalidate the existing CPU physics comparisons. A faster physics-only number
+does not establish faster end-to-end training or equivalent contact dynamics.
+
 `scripts/audit_robot_contact_dynamics.py` computes required generalized forces
 from the reference accelerations, mass matrix, bias and passive forces. It fits
 these with 29 bounded motor torques and unilateral eight-ray friction pyramids
