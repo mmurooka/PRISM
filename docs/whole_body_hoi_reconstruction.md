@@ -432,6 +432,23 @@ object-local contact points are within 3 cm of the target. This stricter spatial
 check gave 0.08 s at 50 Hz and 0.084 s at 500 Hz on that example. Keep both the
 semantic-body and actual-patch metrics; do not rename one as the other.
 
+`scripts/audit_physics_contact_sampling.py --checkpoint PATH --output DIR
+--start-time 4.79 --horizon .6` records the contact forces and derived body
+positions after every MuJoCo step. These describe the pre-integration state,
+so timestamps account for that offset; no extra forward call is inserted.
+Inactive target samples remain in the sequence, preventing separate episodes
+from being joined. The script repeats the rollout without instrumentation and
+requires identical positions, velocities and actions before writing the audit.
+The saved archive and JSON include checkpoint/reference/physics hashes. This
+is a 500 Hz simulation measurement, not a continuous-time contact guarantee.
+
+For the paired horizon-4 study after 200k additional steps, the right-thigh
+actual-patch interval at phase 4.79 was 0.04 s versus 0.10 s at 50 Hz for the
+body-force and physical-patch rewards. The 500 Hz audit measured 0.036 s versus
+0.062 s, with exact recording parity in both cases. The coarse metric thus
+overstated persistence in the patch-reward example. Full-clip success remained
+0/5 for both policies; this is a preliminary single-seed comparison.
+
 Optional `--contact-force-location object_patch` changes force guidance to
 `sum(F_normal * exp(-(contact_point_distance/0.03)^2))` on the selected body.
 It retains geometric approach shaping, source evidence, observations and physics.
