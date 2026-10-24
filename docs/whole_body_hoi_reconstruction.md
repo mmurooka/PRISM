@@ -79,9 +79,12 @@ to a uniform solid cuboid, an assumption especially questionable for a cardboard
 
 ## Limits and required research evaluation
 
-The current solver evaluates candidate contacts at each frame independently; the
-visual/geometric stage has temporal hysteresis, but forces do not yet have temporal
-regularization. Human poses and object poses are not jointly optimized here.
+The contact necessity test evaluates each frame independently. The visual/geometric
+stage has temporal hysteresis. Optional `--temporal-force-smoothness` adds a sparse
+sequence optimization of region forces inside hard friction cones; its per-frame
+feasibility residuals are stored separately. Missing candidate forces stay zero;
+the temporal prior must not be interpreted as contact identification. Human poses
+and object poses are not jointly optimized here.
 Unseen box faces, occluded body parts, camera motion, metric scale and numerical
 accelerations can substantially alter the answer. Edge/corner normals are represented
 by one deterministic adjacent face. Region surface points on each face are collapsed

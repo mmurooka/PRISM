@@ -28,6 +28,8 @@ class ForceCandidate:
 def local_polynomial(times, values, window_s=0.20, derivative=0):
     """Time-aware quadratic fit; derivatives amplify noise without smoothing."""
     times = validate_times(times)
+    if not np.isfinite(window_s) or window_s<=0 or derivative not in (0,1,2):
+        raise ValueError('Polynomial window must be positive and derivative order 0, 1 or 2')
     values = np.asarray(values, dtype=float)
     if values.shape != (len(times), 3) or not np.isfinite(values).all() or len(times) < 3:
         raise ValueError("motion derivatives require at least three finite 3D samples")
