@@ -115,6 +115,8 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
                     force_unit='N_per_kg' if mass_kg is None else 'N',
                     torque_unit='Nm_per_kg' if mass_kg is None else 'Nm',
                     inertia_assumption='provided' if 'inertia_per_mass' in data else 'uniform_solid_cuboid',
+                    com_object_m=np.asarray(data.get('com_object',np.zeros(3))).tolist(),
+                    supplied_inertia_per_mass=np.asarray(data['inertia_per_mass']).tolist() if 'inertia_per_mass' in data else None,
                     scene_support='floor_plane' if 'floor_normal_world' in data else 'not_provided',
                     shape_assumption=str(np.asarray(data.get('shape_assumption', 'provided_cuboid')).item()),
                     contact_mode_codes={'0':'no_visual_geometric_contact','1':'sticking','2':'sliding'},

@@ -339,3 +339,12 @@ An optional reset curriculum (`--focus-start-range FIRST LAST
 It changes training-state sampling only; fixed evaluation starts and unassisted
 rollout dynamics are unchanged. Record this mixture when comparing learning
 runs. A focused training interval is not a contact ground-truth annotation.
+
+`evaluate_contact_sensitivity.py --physical-oat --friction .6 --window .2`
+adds one-at-a-time metric-scale (±10%), inertia multiplier (0.5/1.5), and object
+COM (±5 cm along each local axis) checks. Gravity and rotation are not scaled;
+translation, body vertices, box extents and floor offset scale together. Inertia
+scales with length squared. These selected perturbations do not cover parameter
+interactions or provide calibrated contact probabilities. Shifted COM tests use
+the nominal inertia about the shifted centre, rather than claiming a measured
+mass distribution. Contact metadata now records the supplied COM and inertia.
