@@ -129,6 +129,10 @@ class DynamicsTests(unittest.TestCase):
                                         removal_groups={'right_knee_and_thigh':['right_knee','right_thigh']})
         self.assertFalse(unsupported['feasible'])
         self.assertFalse(unsupported['necessary_groups']['right_knee_and_thigh'])
+        empty=solve_contact_forces([],[0,0,9.81,0,0,0],[0,0,0],1,
+                                   removal_groups={'right_knee_and_thigh':['right_knee','right_thigh']})
+        self.assertFalse(empty['feasible'])
+        self.assertFalse(empty['necessary_groups']['right_knee_and_thigh'])
 
 
 class RigidTrackingTests(unittest.TestCase):

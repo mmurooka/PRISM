@@ -142,7 +142,10 @@ def solve_contact_forces(candidates, wrench_world, com_world, characteristic_len
             b_fit = np.r_[target, np.zeros(a.shape[1])]
         else:
             a_fit, b_fit = a, target
-        result = lsq_linear(a_fit, b_fit, bounds=(0, np.inf), tol=1e-10, max_iter=200)
+        # The unregularized removal problem has just six rows and often many
+        # dependent cone rays. BVLS avoids slow interior iterations there.
+        result = lsq_linear(a_fit, b_fit, bounds=(0, np.inf),
+                            method='trf' if regularized else 'bvls',tol=1e-10,max_iter=200)
         if not result.success:
             # Region-removal fits are often underdetermined (six wrench rows,
             # many redundant friction rays). TRF can stall at a near-boundary
@@ -167,7 +170,7 @@ def solve_contact_forces(candidates, wrench_world, com_world, characteristic_len
         for name, members in (removal_groups or {}).items():
             if not isinstance(name,str) or not name or isinstance(members,str) or not members:
                 raise ValueError('Removal groups require named, nonempty collections of regions')
-            keep = np.repeat([c.region not in members for c in candidates], 8)
+            keep = np.repeat(np.asarray([c.region not in members for c in candidates],dtype=bool), 8)
             group_removal[name] = float(fit(keep, False)[1])
     return dict(forces_world=forces, normalized_residual=float(residual), feasible=bool(feasible),
                 necessary=necessary, residual_without_region=removal,
