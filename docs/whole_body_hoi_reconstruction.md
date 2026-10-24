@@ -376,3 +376,13 @@ all physics/observations stay unchanged. Compare this task-conditioned variant
 with the same initialization, sampling and budget; do not report it as an
 unsupervised recognition improvement. Evaluations also record the longest
 continuous interval with force >1 N and target gap <3 cm for each region.
+
+`--temporal-force-solver clarabel_constrained` instead minimizes force variation
+and force magnitude subject to a per-frame normalized wrench residual cap of
+`max(0.08, independent_fit_residual)`. A `1e-6` numerical feasibility allowance is
+recorded explicitly. The already-infeasible frames keep their original slack;
+this does not manufacture feasibility. This option prevents a soft smoothness
+objective from sacrificing many otherwise explainable motion frames. Original
+contact evidence/necessity bits are still unchanged. The full-clip test retained
+333 feasible frames while reducing regional force-derivative RMS from 127.67 to
+45.14 N/kg/s; these are model-conditioned explanatory forces, not measurements.
