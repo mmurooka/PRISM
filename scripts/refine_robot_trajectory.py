@@ -20,6 +20,7 @@ import torch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from prism_reconstruction.contact_ik import ContactIK,point_jacobian,distance_jacobian
 from prism_reconstruction.torch_robot import TorchRobot,rotation_6d,matrix_6d,acceleration,centroidal_contact_wrench
+from prism_reconstruction.torch_contact_forces import ContactWrenchProposal
 from smooth_contact_trajectory import derivative_summary
 
 
@@ -35,12 +36,13 @@ def main():
     parser.add_argument('--hand-patch',choices=('source','inner'),default='source')
     parser.add_argument('--hand-normal-weight',type=float,default=0.)
     parser.add_argument('--hand-closure-weight',type=float,default=0.)
+    parser.add_argument('--contact-wrench-weight',type=float,default=0.)
     args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
     if args.iterations<1:raise ValueError('Positive iteration count required')
     torch.set_num_threads(1);started=time.time();code_sha=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     dependency_sha={name:hashlib.sha256((Path(__file__).resolve().parents[1]/'prism_reconstruction'/name).read_bytes()).hexdigest()
-        for name in ('torch_robot.py','contact_ik.py')}
+        for name in ('torch_robot.py','contact_ik.py','torch_contact_forces.py')}
     with np.load(args.input/'trajectory.npz') as a:arrays=dict(a)
     records=json.loads((args.input/'diagnostics.json').read_text());meta=json.loads((args.input/'metadata.json').read_text())
     solver=ContactIK(args.input/'scene.xml');m,d=solver.model,solver.data
@@ -127,6 +129,13 @@ def main():
     masses=tensor(m.body_mass);inertial=tensor(m.body_ipos)
     inertia=tensor(m.body_inertia)
     inertial_rotation=tensor(Rotation.from_quat(m.body_iquat[:,[1,2,3,0]]).as_matrix())
+    proposal=None;optimization_parameters=parameters.copy()
+    robot_bodies=torch.arange(m.nbody,device=args.device)!=solver.box_body
+    if args.contact_wrench_weight>0:
+        proposal=ContactWrenchProposal(cf,count,object_normals,stance,on_floor,half,
+            float(m.body_mass.sum()-m.body_mass[solver.box_body]),float(m.body_mass[solver.box_body]),args.device,torch.float32)
+        optimizer.add_param_group({'params':list(proposal.parameters()),'lr':.01})
+        initial_rates.append(.01);optimization_parameters+=list(proposal.parameters())
     self_pairs=np.array([(a,b) for a,b in solver.pairs if a!=solver.floor_geom and b!=solver.floor_geom],int)
     reliable_hand_welds=[{int(m.body_weldid[t['robot_body_id']]) for t in record['targets']
         if t['region'] in ('left_hand','right_hand') and t['evidence']['visual_geometric']} for record in records]
@@ -218,21 +227,32 @@ def main():
             last=torch.einsum('nij,nj->ni',rotations[f,b2],p2)+positions[f,b2]
             violations=(torch.relu(.001-((last-first)*n).sum(-1))/.01).square()
             self_loss=torch.topk(violations,min(100,len(violations))).values.mean()
-        loss=prior+smooth+10*contact+args.hand_normal_weight*normal_loss+15*foot_loss+100*penetration+100*ground+30*object_floor+args.balance_weight*balance+100*self_loss+args.hand_closure_weight*closure_loss
+        contact_wrench=joint.sum()*0;wrench_parts={}
+        if proposal is not None:
+            principal=rotations@inertial_rotation
+            required_robot=centroidal_contact_wrench(centers[:,robot_bodies],principal[:,robot_bodies],masses[robot_bodies],inertia[robot_bodies],dt)
+            b=solver.box_body
+            required_box=centroidal_contact_wrench(centers[:,b:b+1],principal[:,b:b+1],masses[b:b+1],inertia[b:b+1],dt)
+            contact_wrench,wrench_parts=proposal(robot_contact,object_contact,box,Rbox,foot,required_robot,required_box)
+        loss=prior+smooth+10*contact+args.hand_normal_weight*normal_loss+15*foot_loss+100*penetration+100*ground+30*object_floor+args.balance_weight*balance+100*self_loss+args.hand_closure_weight*closure_loss+args.contact_wrench_weight*contact_wrench
         if not torch.isfinite(loss):raise FloatingPointError('Nonfinite global trajectory loss')
         value=float(loss.detach())
-        if value<best_loss:best_loss=value;best=[parameter.detach().clone() for parameter in parameters]
-        loss.backward();torch.nn.utils.clip_grad_norm_(parameters,100.);optimizer.step()
+        if value<best_loss:best_loss=value;best=[parameter.detach().clone() for parameter in optimization_parameters]
+        loss.backward();torch.nn.utils.clip_grad_norm_(optimization_parameters,100.);optimizer.step()
         with torch.no_grad():parameters[0].clamp_(limits[:,0],limits[:,1])
+        if proposal is not None:proposal.project()
         item=dict(iteration=iteration,total=value,prior=float(prior.detach()),smooth=float(smooth.detach()),
             contact=float(contact.detach()),foot=float(foot_loss.detach()),penetration=float(penetration.detach()),
             hand_normal=float(normal_loss.detach()),
             hand_surface_closure=float(closure_loss.detach()),
+            contact_wrench=float(contact_wrench.detach()),
+            proposed_wrench_balance=float(wrench_parts['balance'].detach()) if wrench_parts else None,
+            proposed_force_gap=float(wrench_parts['force_gap'].detach()) if wrench_parts else None,
             object_floor=float(object_floor.detach()),balance=float(balance.detach()),self_collision=float(self_loss.detach()))
         history.append(item)
         if iteration%25==0:print(json.dumps(item),flush=True)
     with torch.no_grad():
-        for parameter,value in zip(parameters,best):parameter.copy_(value)
+        for parameter,value in zip(optimization_parameters,best):parameter.copy_(value)
     q=snapshot();errors=[];penetrations=[];region_errors={}
     for frame,pose in enumerate(q):
         d.qpos[:]=pose;mujoco.mj_forward(m,d);record=records[frame]
@@ -270,6 +290,8 @@ def main():
             hand_patch=args.hand_patch,hand_normal_weight=args.hand_normal_weight,
             hand_surface_closure='Optional cuboid SDF gap at nearest sampled hand surface; recomputed every gradient iteration.',
             hand_closure_weight=args.hand_closure_weight,
+            contact_wrench_weight=args.contact_wrench_weight,
+            contact_wrench_assumptions='Optional projected nonnegative eight-ray forces, robot and box centroidal balance, force-gap products. Object friction 0.6, floor 0.8. No joint-torque, no-slip or exact collision-manifold guarantee. Proposed forces are not measured.',
             collision_samples_per_body=96,collision_plane_refresh_iterations=50,
             collision_planes='Near robot/object and non-adjacent self-collision pairs from MuJoCo.'),
         derivatives_before=derivative_summary(m,original,times),derivatives_after=derivative_summary(m,q,times),
@@ -281,6 +303,22 @@ def main():
         method='Global cubic-spline trajectory optimization with contact, collision, floor, smoothness and selected support-wrench objective.')
     meta.pop('skeleton_error_mean_m',None)
     args.output.mkdir(parents=True);np.savez_compressed(args.output/'trajectory.npz',**arrays)
+    if proposal is not None:
+        with torch.no_grad():
+            joint,root,root6,box,box6=decode();Rroot=rotation_6d(root6);Rbox=rotation_6d(box6)
+            positions,rotations=robot.forward(joint,root,Rroot,box,Rbox)
+            centers=positions+torch.einsum('tbij,bj->tbi',rotations,inertial);principal=rotations@inertial_rotation;b=solver.box_body
+            required_robot=centroidal_contact_wrench(centers[:,robot_bodies],principal[:,robot_bodies],masses[robot_bodies],inertia[robot_bodies],dt)
+            required_box=centroidal_contact_wrench(centers[:,b:b+1],principal[:,b:b+1],masses[b:b+1],inertia[b:b+1],dt)
+            rp=torch.einsum('nij,nj->ni',rotations[cf,cb],cr)+positions[cf,cb]
+            op=torch.einsum('nij,nj->ni',Rbox[cf],co)+box[cf]
+            foot=torch.einsum('tsij,vj->tsvi',rotations[:,feet],foot_local)+positions[:,feet,None]
+            _,parts=proposal(rp,op,box,Rbox,foot,required_robot,required_box)
+            np.savez_compressed(args.output/'proposed_contact_forces.npz',frame_indices=cf.cpu().numpy(),
+                robot_body_ids=cb.cpu().numpy(),robot_points=rp.cpu().numpy(),object_points=op.cpu().numpy(),
+                **{key:parts[key].cpu().numpy() for key in ('object_forces','foot_forces','box_ground_forces')})
+            meta['global_refinement']['selected_proposed_wrench_balance']=float(parts['balance'])
+            meta['global_refinement']['selected_proposed_force_gap']=float(parts['force_gap'])
     shutil.copyfile(args.input/'scene.xml',args.output/'scene.xml')
     (args.output/'diagnostics.json').write_text(json.dumps(records,indent=2,allow_nan=False))
     (args.output/'metadata.json').write_text(json.dumps(meta,indent=2,allow_nan=False))

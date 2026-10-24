@@ -307,3 +307,12 @@ contact, and the audit omits velocity complementarity and force continuity.
 Residuals are reported separately for the floating robot, floating object and
 joint motors. Synthetic tests verify floor-force direction, missing support and
 motor bounds. This necessary check cannot replace an unassisted rollout.
+
+The optional `refine_robot_trajectory.py --contact-wrench-weight` fits nonnegative
+Coulomb-pyramid forces together with the robot/box spline. It balances robot and
+box centroidal wrenches separately and penalizes force times contact-point gap,
+including stance feet and box-floor vertices. It saves proposed forces for audit.
+This is a necessary-condition refinement, not inverse dynamics certification:
+joint torque limits, no-slip and exact collision-manifold consistency still need
+independent checks. In particular, uncertain source hypotheses are not converted
+into measured contact labels by a successful force fit.
