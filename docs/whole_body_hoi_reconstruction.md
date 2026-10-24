@@ -325,3 +325,11 @@ record this assumption. The previous retargeting asset has 35.525 kg robot mass;
 the pinned training URDF has 33.343 kg. Correcting this discrepancy does not by
 itself establish successful teacher transfer. Runs without this option retain
 the old physical model for reproducibility.
+
+`extract_image_contact_cues.py` records silhouette-boundary corroboration from
+local person/box masks, projected human vertices and the existing 3D signed gap.
+It requires a persistent regional cue, saves all thresholds and hashes, and
+keeps the raw VLM/dynamics labels unchanged. These are image-supported candidates,
+not contact ground truth: occlusion can also make pelvis/torso boundaries appear
+adjacent to the box. The current implementation has no human self-occlusion depth
+test, so these cues must not automatically become hard contact constraints.
