@@ -219,3 +219,13 @@ contact-force feasibility. `smooth_contact_trajectory.py` is a diagnostic filter
 baseline; it remeasures collisions because smoothing alone can cause penetration.
 Neither output is safe for robot execution. Compare all residuals and physical
 rollouts before selecting a training reference.
+
+`scripts/audit_robot_contact_dynamics.py` computes required generalized forces
+from the reference accelerations, mass matrix, bias and passive forces. It fits
+these with 29 bounded motor torques and unilateral eight-ray friction pyramids
+at MuJoCo collision points. Run both a tight gap tolerance (2 mm) and a deliberately
+optimistic tolerance (2 cm). A fit at positive separation is not a physical
+contact, and the audit omits velocity complementarity and force continuity.
+Residuals are reported separately for the floating robot, floating object and
+joint motors. Synthetic tests verify floor-force direction, missing support and
+motor bounds. This necessary check cannot replace an unassisted rollout.
