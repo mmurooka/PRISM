@@ -424,6 +424,21 @@ point. Removing it changed box height by about 12 mm at 0.20 s, but only 5 mm at
 0.60 s as other contacts compensated. Load-bearing contact need not be necessary
 for a similar object motion; this does not establish full-motion success.
 
+Contact duration metrics are sampled at the 50 Hz control rate. A 500 Hz check
+of the 200k policy reduced the 0.16 s proxy-distance/body-force interval to
+0.11 s. Moreover, a nearby robot proxy and force somewhere on its articulated
+body need not coincide. Evaluation now separately sums forces whose actual
+object-local contact points are within 3 cm of the target. This stricter spatial
+check gave 0.08 s at 50 Hz and 0.084 s at 500 Hz on that example. Keep both the
+semantic-body and actual-patch metrics; do not rename one as the other.
+
+Optional `--contact-force-location object_patch` changes force guidance to
+`sum(F_normal * exp(-(contact_point_distance/0.03)^2))` on the selected body.
+It retains geometric approach shaping, source evidence, observations and physics.
+The default `body` mode preserves earlier experiments. Changing this setting on
+resume is recorded explicitly. It is a smooth training signal, distinct from
+the hard 3 cm/1 N evaluation threshold, and does not itself guarantee success.
+
 `--temporal-force-solver clarabel_constrained` instead minimizes force variation
 and force magnitude subject to a per-frame normalized wrench residual cap of
 `max(0.08, independent_fit_residual)`. A `1e-6` numerical feasibility allowance is

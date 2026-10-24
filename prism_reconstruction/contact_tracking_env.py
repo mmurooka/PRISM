@@ -14,6 +14,7 @@ from scipy.ndimage import gaussian_filter1d
 
 from .robot_physics import motor_parameters,reference_velocities
 from .reference_control import load_inverse_torques,reference_pd_target
+from .contact_patch import contact_patch_forces
 
 
 REGIONS=('left_hand','right_hand','left_forearm','right_forearm','left_upper_arm','right_upper_arm',
@@ -52,13 +53,15 @@ class ContactTrackingEnv(gym.Env):
                  randomize=False,action_mode='joint_offset',teacher_checkpoint=None,teacher_residual_scale=1.,
                  contact_reward='additive',policy_control='residual',pd_gain_source='local',
                  focus_start_range=None,focus_probability=0.,contact_group=(),contact_group_weight=0.,
-                 inverse_torque_reference=None,record_contact_details=False):
+                 inverse_torque_reference=None,record_contact_details=False,contact_force_location='body'):
         if reward_mode not in ('whole_body','hands_only'):raise ValueError('Unknown reward variant')
         if contact_reward not in ('additive','coupled'):raise ValueError('Unknown contact reward recipe')
         self.contact_reward=contact_reward
         if policy_control not in ('residual','teacher_absolute','reference_pd'):raise ValueError('Unknown policy control mode')
         self.policy_control=policy_control
         self.record_contact_details=bool(record_contact_details)
+        if contact_force_location not in ('body','object_patch'):raise ValueError('Unknown contact-force location mode')
+        self.contact_force_location=contact_force_location
         if inverse_torque_reference and policy_control!='reference_pd':raise ValueError('Inverse torques require reference-PD control')
         if pd_gain_source not in ('local','checkpoint'):raise ValueError('Unknown PD gain source')
         self.pd_gain_source=pd_gain_source
@@ -218,12 +221,14 @@ class ContactTrackingEnv(gym.Env):
             if self.box not in (first,second):continue
             robot=second if first==self.box else first
             force=np.zeros(6);mujoco.mj_contactForce(m,d,i,force)
-            if self.record_contact_details:
-                sign=1. if second==self.box else -1.
-                force_world=sign*(c.frame.reshape(3,3).T@force[:3])
-                object_contacts.append(dict(other_body=robot,other_weld=int(m.body_weldid[robot]),
+            if self.record_contact_details or self.contact_force_location=='object_patch':
+                sample=dict(other_body=robot,other_weld=int(m.body_weldid[robot]),
                     point_object=((c.pos-d.xpos[self.box])@d.xmat[self.box].reshape(3,3)).tolist(),
-                    force_on_object_world_n=force_world.tolist(),normal_force_n=max(0.,float(force[0]))))
+                    normal_force_n=max(0.,float(force[0])))
+                if self.record_contact_details:
+                    sign=1. if second==self.box else -1.
+                    sample['force_on_object_world_n']=(sign*(c.frame.reshape(3,3).T@force[:3])).tolist()
+                object_contacts.append(sample)
             if robot==0:continue
             weld=int(m.body_weldid[robot]);forces[weld]=forces.get(weld,0.)+max(0.,float(force[0]))
         targets=self._targets(index);weights=[];errors=[];normal_forces=[]
@@ -231,14 +236,19 @@ class ContactTrackingEnv(gym.Env):
         for target in targets:
             robot,box=self._contact_positions(target);errors.append(float(np.linalg.norm(robot-box)))
             weights.append(target['weight']);weld=int(m.body_weldid[target['robot_body_id']])
-            normal_forces.append(forces.get(weld,0.))
+            normal_forces.append(contact_patch_forces(object_contacts,weld,np.asarray(target['point_object']))[0]
+                if self.contact_force_location=='object_patch' else forces.get(weld,0.))
         unwanted=sum(force>1 and weld not in allowed for weld,force in forces.items())
         contact_position,contact_term,contact_force=contact_reward_terms(errors,normal_forces,weights,self.contact_reward)
-        region_forces={};region_gaps={}
+        region_forces={};region_gaps={};region_patch_forces={};region_contact_distances={}
         for target in self.records[index]['targets']:
             name=target['region'];robot_point,box_point=self._contact_positions(target)
             region_forces[name]=max(region_forces.get(name,0.),forces.get(int(m.body_weldid[target['robot_body_id']]),0.))
             region_gaps[name]=min(region_gaps.get(name,float('inf')),float(np.linalg.norm(robot_point-box_point)))
+            if self.record_contact_details:
+                _,matched,distance=contact_patch_forces(object_contacts,int(m.body_weldid[target['robot_body_id']]),np.asarray(target['point_object']))
+                region_patch_forces[name]=max(region_patch_forces.get(name,0.),matched)
+                if distance is not None:region_contact_distances[name]=min(region_contact_distances.get(name,float('inf')),distance)
         effort=float(np.mean((d.ctrl/np.maximum(self.motor['upper'],1))**2))
         residual_units=self.teacher_residual_scale if self.teacher is not None and self.policy_control=='residual' else 1.
         action_rate=float(np.mean((residual_units*(action-self.previous_action))**2))
@@ -268,5 +278,6 @@ class ContactTrackingEnv(gym.Env):
             failure_reasons=failure_reasons,root_height_m=float(d.qpos[2]),root_up_cosine=tilt,
             region_object_contact_force_n=region_forces,region_target_gap_m=region_gaps,
             terminated_by_tracking_failure=bool(terminated))
-        if self.record_contact_details:info['object_contacts']=object_contacts
+        if self.record_contact_details:info.update(object_contacts=object_contacts,
+            region_patch_contact_force_n=region_patch_forces,region_contact_point_distance_m=region_contact_distances)
         return self._observation(),float(reward),bool(terminated),bool(truncated),info

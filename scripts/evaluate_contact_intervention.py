@@ -40,7 +40,8 @@ def main():
             policy_control=training.get('policy_control','residual'),pd_gain_source=training.get('pd_gain_source','local'),
             contact_reward=training.get('contact_reward','additive'),contact_group=training.get('contact_group',[]),
             contact_group_weight=training.get('contact_group_weight',0.),
-            inverse_torque_reference=training.get('inverse_torque_reference'),record_contact_details=True)
+            inverse_torque_reference=training.get('inverse_torque_reference'),record_contact_details=True,
+            contact_force_location=training.get('contact_force_location','body'))
         steps=args.intervention_time/env.control_dt
         if not np.isclose(steps,round(steps)):raise ValueError('Intervention must align with control steps')
         intervention_step=int(round(steps));observation,_=env.reset(seed=0,options={'start_time':args.start_time})
