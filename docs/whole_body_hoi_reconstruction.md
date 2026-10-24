@@ -250,6 +250,16 @@ reset previous actions, and the selected geometric tolerance; it is not a
 closed-loop reachability proof. Residual action-rate penalties use applied
 teacher-action units so changing the normalized range does not dilute them.
 
+The `coupled` contact reward uses dense approach shaping `exp(-distance/0.08)`
+and a separate product of this position score with clipped normal force (0 to
+1 N). Contact elsewhere on the body cannot earn the full force-guidance reward.
+This addresses a failure of the earlier additive force-presence bonus, whose
+high score could coexist with large target-point error. The `additive` recipe
+remains available for previous checkpoints and controlled comparisons. This is
+our whole-body extension, not a literal reproduction of the paper's soft force
+gate. Evaluate force and position jointly per region; aggregate reward alone
+does not establish knee-contact retention.
+
 `scripts/audit_robot_contact_dynamics.py` computes required generalized forces
 from the reference accelerations, mass matrix, bias and passive forces. It fits
 these with 29 bounded motor torques and unilateral eight-ray friction pyramids

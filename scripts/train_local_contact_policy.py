@@ -16,11 +16,11 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from prism_reconstruction.robot_physics import prepare_physics_scene
 
 
-def make_environment(reference,scene,mode,seed,action_mode,horizon,teacher,residual_scale):
+def make_environment(reference,scene,mode,seed,action_mode,horizon,teacher,residual_scale,contact_reward):
     from prism_reconstruction.contact_tracking_env import ContactTrackingEnv
     from stable_baselines3.common.monitor import Monitor
     env=Monitor(ContactTrackingEnv(reference,scene,reward_mode=mode,horizon_s=horizon,random_start=True,
-        action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale))
+        action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale,contact_reward=contact_reward))
     env.reset(seed=seed)
     return env
 
@@ -40,6 +40,7 @@ def main():
     parser.add_argument('--horizon',type=float,default=2.)
     parser.add_argument('--teacher-checkpoint',type=Path,help='Optional released PRISM actor under the residual policy')
     parser.add_argument('--teacher-residual-scale',type=float,default=1.)
+    parser.add_argument('--contact-reward',choices=('additive','coupled'),default='coupled')
     args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
     if args.steps<1 or args.envs<1:raise ValueError('Positive training budget and environment count required')
@@ -54,7 +55,7 @@ def main():
     torch.set_num_threads(1)
     if args.device.startswith('cuda') and not torch.cuda.is_available():raise RuntimeError('CUDA not visible')
     teacher=str(args.teacher_checkpoint.resolve()) if args.teacher_checkpoint else None
-    factories=[functools.partial(make_environment,str(args.reference.resolve()),str(scene.resolve()),args.reward_mode,args.seed+i,args.action_mode,args.horizon,teacher,args.teacher_residual_scale)
+    factories=[functools.partial(make_environment,str(args.reference.resolve()),str(scene.resolve()),args.reward_mode,args.seed+i,args.action_mode,args.horizon,teacher,args.teacher_residual_scale,args.contact_reward)
                for i in range(args.envs)]
     vector=SubprocVecEnv(factories,start_method='forkserver')
     logger=configure(str(args.output),['stdout','csv'])
@@ -84,8 +85,13 @@ def main():
         action_mode=args.action_mode,learning_rate=args.learning_rate,horizon_s=args.horizon,
         teacher_checkpoint=teacher,
         teacher_residual_scale=args.teacher_residual_scale,
+        contact_reward=args.contact_reward,
         teacher_checkpoint_sha256=hashlib.sha256(args.teacher_checkpoint.read_bytes()).hexdigest() if teacher else None,
         initial_residual_mean='zero' if teacher and not args.resume else 'default_or_resumed',
+        initialization_checkpoint=str(args.resume.resolve()) if args.resume else None,
+        initialization_checkpoint_sha256=hashlib.sha256(args.resume.read_bytes()).hexdigest() if args.resume else None,
+        initial_timesteps=int(policy.num_timesteps),
+        reward_changed_on_resume=bool(args.resume and source_meta.get('contact_reward','additive')!=args.contact_reward),
         code_sha256={name:hashlib.sha256((Path(__file__).resolve().parents[1]/name).read_bytes()).hexdigest()
             for name in ('prism_reconstruction/contact_tracking_env.py','prism_reconstruction/robot_physics.py',
                          'prism_reconstruction/released_teacher.py','scripts/train_local_contact_policy.py')},
@@ -103,7 +109,8 @@ def main():
         policy.learn(total_timesteps=args.steps,reset_num_timesteps=not bool(args.resume),
             callback=CheckpointCallback(save_freq=max(1,100000//args.envs),save_path=str(args.output/'checkpoints'),name_prefix='policy'))
         policy.save(args.output/'policy.zip')
-        metadata.update(actual_steps=int(policy.num_timesteps),elapsed_s=time.time()-started,complete=True)
+        metadata.update(actual_steps=int(policy.num_timesteps),new_steps=int(policy.num_timesteps)-metadata['initial_timesteps'],
+                        elapsed_s=time.time()-started,complete=True)
         (args.output/'metadata.json').write_text(json.dumps(metadata,indent=2))
     finally:vector.close()
 

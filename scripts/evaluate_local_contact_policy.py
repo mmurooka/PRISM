@@ -35,8 +35,9 @@ def main():
     if args.checkpoint:
         teacher=teacher or training_metadata.get('teacher_checkpoint')
     residual_scale=training_metadata.get('teacher_residual_scale',1.) if args.checkpoint else args.teacher_residual_scale
+    contact_reward=training_metadata.get('contact_reward','additive') if args.checkpoint else 'additive'
     env=ContactTrackingEnv(args.reference,args.physics_scene,horizon_s=args.horizon,random_start=False,
-        action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale)
+        action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale,contact_reward=contact_reward)
     policy=None
     if args.checkpoint:
         from stable_baselines3 import PPO
@@ -78,6 +79,7 @@ def main():
             independent_diagnostic_frames=False,controller=('teacher_plus_residual_PPO' if teacher else 'residual_PPO') if policy else ('released_PRISM_teacher' if teacher else 'zero_residual_PD'),
             action_mode=action_mode,
             teacher_residual_scale=residual_scale,
+            contact_reward=contact_reward,
             teacher_checkpoint_sha256=env.teacher.sha256 if env.teacher is not None else None,
             evaluation_code_sha256={path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in
                 (Path(__file__),Path(__file__).resolve().parents[1]/'prism_reconstruction/contact_tracking_env.py')},

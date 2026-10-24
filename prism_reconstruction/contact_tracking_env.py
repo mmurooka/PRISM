@@ -20,12 +20,30 @@ REGIONS=('left_hand','right_hand','left_forearm','right_forearm','left_upper_arm
          'left_foot','right_foot','pelvis','torso','head','other')
 
 
+def contact_reward_terms(errors,normal_forces,weights,recipe):
+    """Separate approach shaping from force at the intended surface location."""
+    if not len(weights):return 1.,1.,1.
+    errors=np.asarray(errors);forces=np.asarray(normal_forces)
+    force_presence=float(np.average(forces>1.,weights=weights))
+    if recipe=='additive':
+        position=float(np.average(np.exp(-errors**2/.03**2),weights=weights))
+        return position,force_presence,force_presence
+    if recipe!='coupled':raise ValueError('Unknown contact reward recipe')
+    position_terms=np.exp(-errors/.08)
+    position=float(np.average(position_terms,weights=weights))
+    coupled=float(np.average(position_terms*np.clip(forces/1.,0.,1.),weights=weights))
+    return position,coupled,force_presence
+
+
 class ContactTrackingEnv(gym.Env):
     metadata={'render_modes':[]}
 
     def __init__(self,reference,physics_scene,reward_mode='whole_body',horizon_s=2.,random_start=True,
-                 randomize=False,action_mode='joint_offset',teacher_checkpoint=None,teacher_residual_scale=1.):
+                 randomize=False,action_mode='joint_offset',teacher_checkpoint=None,teacher_residual_scale=1.,
+                 contact_reward='additive'):
         if reward_mode not in ('whole_body','hands_only'):raise ValueError('Unknown reward variant')
+        if contact_reward not in ('additive','coupled'):raise ValueError('Unknown contact reward recipe')
+        self.contact_reward=contact_reward
         self.reference=Path(reference);self.reward_mode=reward_mode;self.horizon_s=float(horizon_s)
         self.random_start=random_start;self.randomize=randomize
         self.model=m=mujoco.MjModel.from_xml_path(str(physics_scene));self.data=d=mujoco.MjData(m)
@@ -144,15 +162,14 @@ class ContactTrackingEnv(gym.Env):
             if robot==0:continue
             force=np.zeros(6);mujoco.mj_contactForce(m,d,i,force)
             weld=int(m.body_weldid[robot]);forces[weld]=forces.get(weld,0.)+max(0.,float(force[0]))
-        targets=self._targets(index);weights=[];errors=[];supported=[]
+        targets=self._targets(index);weights=[];errors=[];normal_forces=[]
         allowed={int(m.body_weldid[target['robot_body_id']]) for target in self.records[index]['targets']}
         for target in targets:
             robot,box=self._contact_positions(target);errors.append(float(np.linalg.norm(robot-box)))
             weights.append(target['weight']);weld=int(m.body_weldid[target['robot_body_id']])
-            supported.append(forces.get(weld,0.)>1.)
+            normal_forces.append(forces.get(weld,0.))
         unwanted=sum(force>1 and weld not in allowed for weld,force in forces.items())
-        contact_position=float(np.average(np.exp(-np.square(errors)/.03**2),weights=weights)) if weights else 1.
-        contact_force=float(np.average(supported,weights=weights)) if weights else 1.
+        contact_position,contact_term,contact_force=contact_reward_terms(errors,normal_forces,weights,self.contact_reward)
         region_forces={};region_gaps={}
         for target in self.records[index]['targets']:
             name=target['region'];robot_point,box_point=self._contact_positions(target)
@@ -161,7 +178,9 @@ class ContactTrackingEnv(gym.Env):
         effort=float(np.mean((d.ctrl/np.maximum(self.motor['upper'],1))**2))
         residual_units=self.teacher_residual_scale if self.teacher is not None else 1.
         action_rate=float(np.mean((residual_units*(action-self.previous_action))**2))
-        reward=.25*posture+.2*root+.3*object_tracking+.15*contact_position+.1*contact_force+.1
+        contact_bonus=(.15*contact_position+.1*contact_term if self.contact_reward=='additive'
+                       else .25*contact_position+.5*contact_term)
+        reward=.25*posture+.2*root+.3*object_tracking+contact_bonus+.1
         reward-=.01*effort+.01*action_rate+.03*unwanted
         tilt=float(d.xmat[1].reshape(3,3)[2,2])
         finite=bool(np.isfinite(d.qpos).all() and np.isfinite(d.qvel).all())
@@ -175,6 +194,7 @@ class ContactTrackingEnv(gym.Env):
         self.previous_action=action
         info=dict(root_error_m=root_error,object_error_m=object_error,contact_position_reward=contact_position,
             contact_force_fraction=contact_force,contact_error_mean_m=float(np.mean(errors)) if errors else 0.,
+            contact_guidance_term=contact_term,
             active_contact_targets=len(targets),unwanted_object_contact_bodies=int(unwanted),
             reference_time_s=float(self.start_time+self.elapsed),box_height_m=float(d.xpos[self.box,2]),
             physics_warning_count=warnings,
