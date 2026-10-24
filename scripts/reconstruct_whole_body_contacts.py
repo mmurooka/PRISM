@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--temporal-force-smoothness', type=float, default=0,
                         help='Optional force derivative regularization; feasibility residuals are saved separately')
     parser.add_argument('--derivative-window-s', type=float, default=.20)
-    parser.add_argument('--temporal-force-solver',choices=('lsmr','clarabel'),default='lsmr')
+    parser.add_argument('--temporal-force-solver',choices=('lsmr','clarabel','clarabel_constrained'),default='lsmr')
     args = parser.parse_args()
     result = run_archive(args.input, args.output, friction=args.friction, mass_kg=args.mass_kg,
                          temporal_force_smoothness=args.temporal_force_smoothness,

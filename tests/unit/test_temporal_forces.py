@@ -8,6 +8,17 @@ from prism_reconstruction.temporal_forces import solve_force_sequence
 
 
 class TemporalForceTests(unittest.TestCase):
+    def test_hard_caps_prevent_smoothing_away_required_forces(self):
+        t=np.arange(12)/30;wrench=np.tile([0.,0,9.81,0,0,0],(12,1));wrench[1::2,2]+=3.
+        candidates=[[ForceCandidate('support',np.zeros(3),np.array([0.,0,1.]),friction=.3)] for _ in t]
+        args=(candidates,wrench,np.zeros((12,3)),t,1.)
+        soft=solve_force_sequence(*args,smoothness=.1,solver='clarabel')
+        hard=solve_force_sequence(*args,smoothness=.1,solver='clarabel_constrained',residual_caps=np.full(12,.08))
+        self.assertGreater(float(soft['normalized_residual'].max()),.08)
+        self.assertLessEqual(float(hard['normalized_residual'].max()),.080001)
+        self.assertTrue(hard['feasible'].all())
+        self.assertGreater(float(np.diff(hard['region_forces_world'][:,:,2],axis=0).std()),.1)
+
     def test_conic_formulation_matches_iterative_least_squares(self):
         t=np.arange(12)/30;wrench=np.tile([0,0,9.81,0,0,0],(12,1));wrench[:,2]+=.2*np.sin(np.arange(12))
         candidates=[[ForceCandidate('support',np.zeros(3),np.array([0.,0,1.]),friction=.3)] for _ in t]

@@ -139,18 +139,22 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
     if temporal_force_smoothness:
         from .temporal_forces import solve_force_sequence
         sequence=solve_force_sequence(candidate_sequence,motion['wrench_world'],motion['com_world'],times,
-                                       length,smoothness=temporal_force_smoothness,solver=temporal_force_solver)
+                                       length,smoothness=temporal_force_smoothness,solver=temporal_force_solver,
+                                       residual_caps=np.maximum(residual,.08) if temporal_force_solver=='clarabel_constrained' else None)
         arrays.update(temporal_region_names=np.asarray([name[1] for name in sequence['region_names']]),
                       temporal_region_sources=np.asarray([name[0] for name in sequence['region_names']]),
                       temporal_region_forces_world=sequence['region_forces_world'],
                       temporal_wrench_residual=sequence['normalized_residual'],
                       temporal_force_feasible=sequence['feasible'])
+        if sequence['residual_caps'] is not None:arrays['temporal_wrench_residual_caps']=sequence['residual_caps']
         for frame,forces in zip(records,sequence['forces_world']):
             frame['temporal_force_feasible']=bool(sequence['feasible'][frame['frame']])
             for candidate,force in zip(frame['candidates'],forces):
                 candidate['temporal_force_world']=force.tolist()
         metadata['temporal_force_interpretation']='Smoothed explanatory forces; contact necessity remains the independent per-frame region-removal test.'
         metadata['temporal_force_solver']=sequence['solver_info']
+        if sequence['residual_caps'] is not None:
+            metadata['temporal_force_constraint']='Per-frame residual <= max(0.08, independent fit residual), with 1e-6 numerical tolerance. Initially infeasible frames retain their original slack, not a feasibility certificate.'
     return arrays, metadata, records
 
 

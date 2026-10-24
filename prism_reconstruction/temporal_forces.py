@@ -12,12 +12,16 @@ from .dynamics import friction_rays
 
 def solve_force_sequence(candidates_by_frame, wrench_world, com_world, timestamps_s,
                          characteristic_length_m, smoothness=1e-4, regularization=1e-5,
-                         tolerance=.08, solver='lsmr'):
-    if solver not in ('lsmr','clarabel'):raise ValueError('Unknown temporal force solver')
+                         tolerance=.08, solver='lsmr', residual_caps=None):
+    if solver not in ('lsmr','clarabel','clarabel_constrained'):raise ValueError('Unknown temporal force solver')
     times=validate_times(timestamps_s)
     wrench=np.asarray(wrench_world,float)
     centers=np.asarray(com_world,float)
     count=len(times)
+    if solver=='clarabel_constrained':
+        residual_caps=np.asarray(residual_caps,float)
+        if residual_caps.shape!=(count,) or not np.isfinite(residual_caps).all() or np.any(residual_caps<0):
+            raise ValueError('Per-frame nonnegative wrench residual caps required')
     if (len(candidates_by_frame)!=count or wrench.shape!=(count,6) or centers.shape!=(count,3)
         or not np.isfinite(wrench).all() or not np.isfinite(centers).all()
         or not np.isfinite(characteristic_length_m) or characteristic_length_m<=0
@@ -70,7 +74,9 @@ def solve_force_sequence(candidates_by_frame, wrench_world, com_world, timestamp
             temporal=sparse.kron(derivative,sparse.eye(len(names)*3),format='csr')@aggregate
             matrices.append(np.sqrt(smoothness)*temporal/force_scale)
             rhs.append(np.zeros(temporal.shape[0]))
-        matrix=sparse.vstack(matrices,format='csr');target_all=np.concatenate(rhs)
+        constrained=solver=='clarabel_constrained'
+        matrix=sparse.vstack(matrices[1:] if constrained else matrices,format='csr')
+        target_all=np.concatenate(rhs[1:] if constrained else rhs)
         if solver=='lsmr':
             fit=lsq_linear(matrix,target_all,bounds=(0,np.inf),tol=1e-8,lsmr_tol=1e-10,max_iter=300)
             if not fit.success or not np.isfinite(fit.x).all():raise RuntimeError(f'Temporal force optimization failed: {fit.message}')
@@ -83,11 +89,18 @@ def solve_force_sequence(candidates_by_frame, wrench_world, com_world, timestamp
             P=sparse.block_diag([sparse.csc_matrix((total,total)),2*sparse.eye(rows)],format='csc')
             constraints=sparse.vstack([sparse.hstack([matrix,-sparse.eye(rows)]),
                 sparse.hstack([-sparse.eye(total),sparse.csr_matrix((total,rows))])],format='csc')
+            cones=[clarabel.ZeroConeT(rows),clarabel.NonnegativeConeT(total)]
+            bounds=np.r_[target_all,np.zeros(total)]
+            if constrained:
+                coo=physical.tocoo();cone_rows=7*(coo.row//6)+1+coo.row%6
+                cone_matrix=sparse.coo_matrix((-coo.data,(cone_rows,coo.col)),shape=(7*count,total+rows)).tocsc()
+                constraints=sparse.vstack([constraints,cone_matrix],format='csc')
+                bounds=np.r_[bounds,np.c_[residual_caps,-target.reshape(count,6)].reshape(-1)]
+                cones += [clarabel.SecondOrderConeT(7) for _ in times]
             settings=clarabel.DefaultSettings();settings.verbose=False;settings.max_iter=100
             settings.tol_gap_abs=settings.tol_gap_rel=settings.tol_feas=1e-7
             settings.max_threads=1
-            fit=clarabel.DefaultSolver(P,np.zeros(total+rows),constraints,np.r_[target_all,np.zeros(total)],
-                [clarabel.ZeroConeT(rows),clarabel.NonnegativeConeT(total)],settings).solve()
+            fit=clarabel.DefaultSolver(P,np.zeros(total+rows),constraints,bounds,cones,settings).solve()
             coefficients=np.asarray(fit.x[:total])
             if str(fit.status)!='Solved' or not np.isfinite(coefficients).all() or coefficients.min()<-1e-6:
                 raise RuntimeError(f'Temporal conic force optimization failed: {fit.status}')
@@ -98,11 +111,16 @@ def solve_force_sequence(candidates_by_frame, wrench_world, com_world, timestamp
         coefficients=np.empty(0)
         solver_info=dict(name=solver,status='no_candidates',iterations=0)
     residual=np.linalg.norm((physical@coefficients-target).reshape(count,6),axis=1)
+    if solver=='clarabel_constrained' and np.any(residual>residual_caps+1e-6):
+        raise RuntimeError('Constrained temporal forces exceed wrench residual caps')
     forces=[]
     for t,rays in enumerate(rays_by_frame):
         values=coefficients[offsets[t]:offsets[t+1]]
         forces.append(np.asarray([values[8*i:8*i+8]@r for i,r in enumerate(rays)]).reshape(-1,3))
+    numerical_tolerance=1e-6 if solver=='clarabel_constrained' else 0.
+    solver_info['feasibility_numerical_tolerance']=numerical_tolerance
     return dict(forces_world=forces,region_names=names,
                 region_forces_world=(aggregate@coefficients).reshape(count,len(names),3),
-                normalized_residual=residual,feasible=residual<=tolerance,
-                smoothness=smoothness,solver_info=solver_info)
+                normalized_residual=residual,feasible=residual<=tolerance+numerical_tolerance,
+                smoothness=smoothness,solver_info=solver_info,
+                residual_caps=residual_caps if solver=='clarabel_constrained' else None)
