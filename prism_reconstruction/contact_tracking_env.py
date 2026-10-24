@@ -150,6 +150,11 @@ class ContactTrackingEnv(gym.Env):
         unwanted=sum(force>1 and weld not in allowed for weld,force in forces.items())
         contact_position=float(np.average(np.exp(-np.square(errors)/.03**2),weights=weights)) if weights else 1.
         contact_force=float(np.average(supported,weights=weights)) if weights else 1.
+        region_forces={};region_gaps={}
+        for target in self.records[index]['targets']:
+            name=target['region'];robot_point,box_point=self._contact_positions(target)
+            region_forces[name]=max(region_forces.get(name,0.),forces.get(int(m.body_weldid[target['robot_body_id']]),0.))
+            region_gaps[name]=min(region_gaps.get(name,float('inf')),float(np.linalg.norm(robot_point-box_point)))
         effort=float(np.mean((d.ctrl/np.maximum(self.motor['upper'],1))**2))
         action_rate=float(np.mean((action-self.previous_action)**2))
         reward=.25*posture+.2*root+.3*object_tracking+.15*contact_position+.1*contact_force+.1
@@ -170,5 +175,6 @@ class ContactTrackingEnv(gym.Env):
             reference_time_s=float(self.start_time+self.elapsed),box_height_m=float(d.xpos[self.box,2]),
             physics_warning_count=warnings,
             failure_reasons=failure_reasons,root_height_m=float(d.qpos[2]),root_up_cosine=tilt,
+            region_object_contact_force_n=region_forces,region_target_gap_m=region_gaps,
             terminated_by_tracking_failure=bool(terminated))
         return self._observation(),float(reward),bool(terminated),bool(truncated),info

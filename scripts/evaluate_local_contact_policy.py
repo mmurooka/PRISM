@@ -64,10 +64,20 @@ def main():
             failure_reasons=metrics[-1]['failure_reasons'],
             contact_force_fraction_mean=float(np.mean([m['contact_force_fraction'] for m in metrics if m['active_contact_targets']]))
                 if any(m['active_contact_targets'] for m in metrics) else None)
+        summary['regions']={}
+        for region in sorted(set().union(*(m['region_object_contact_force_n'] for m in metrics))):
+            selected=[m for m in metrics if region in m['region_object_contact_force_n']]
+            summary['regions'][region]=dict(active_steps=len(selected),
+                force_present_fraction=float(np.mean([m['region_object_contact_force_n'][region]>1. for m in selected])),
+                force_and_gap_below_3cm_fraction=float(np.mean([m['region_object_contact_force_n'][region]>1.
+                    and m['region_target_gap_m'][region]<.03 for m in selected])),
+                target_gap_median_m=float(np.median([m['region_target_gap_m'][region] for m in selected])))
         metadata=dict(schema='g1_unassisted_physics_rollout_v1',source_video_sha256=env.meta['source_video_sha256'],
             independent_diagnostic_frames=False,controller=('teacher_plus_residual_PPO' if teacher else 'residual_PPO') if policy else ('released_PRISM_teacher' if teacher else 'zero_residual_PD'),
             action_mode=action_mode,
             teacher_checkpoint_sha256=env.teacher.sha256 if env.teacher is not None else None,
+            evaluation_code_sha256={path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in
+                (Path(__file__),Path(__file__).resolve().parents[1]/'prism_reconstruction/contact_tracking_env.py')},
             checkpoint_sha256=hashlib.sha256(args.checkpoint.read_bytes()).hexdigest() if args.checkpoint else None,
             robot_root_assistance=False,object_assistance=False,object_mass_kg=float(env.model.body_mass[env.box]),
             safe_for_robot_execution=False,**summary)
