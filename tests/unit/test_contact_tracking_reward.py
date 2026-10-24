@@ -3,10 +3,19 @@ from pathlib import Path
 import unittest
 import numpy as np
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
-from prism_reconstruction.contact_tracking_env import contact_reward_terms
+from prism_reconstruction.contact_tracking_env import contact_reward_terms,emphasized_contact_group
 
 
 class ContactTrackingRewardTests(unittest.TestCase):
+    def test_group_priority_accepts_alternative_patches_but_not_hand_substitution(self):
+        group=('right_knee','right_thigh')
+        hand_only,active=emphasized_contact_group([0.],[10.],['right_hand'],group)
+        self.assertEqual(hand_only,0.);self.assertFalse(active)
+        near,active=emphasized_contact_group([.01,.4],[10.,0.],['right_thigh','right_knee'],group)
+        self.assertTrue(active);self.assertAlmostEqual(near,np.exp(-.01/.05))
+        approach,_=emphasized_contact_group([.01],[0.],['right_thigh'],group)
+        self.assertAlmostEqual(approach,.25*near)
+
     def test_force_elsewhere_does_not_replace_target_location(self):
         near=contact_reward_terms([.01],[100.],[1.],'coupled')
         far=contact_reward_terms([.4],[100.],[1.],'coupled')

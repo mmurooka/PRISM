@@ -35,13 +35,22 @@ def contact_reward_terms(errors,normal_forces,weights,recipe):
     return position,coupled,force_presence
 
 
+def emphasized_contact_group(errors,normal_forces,regions,requested):
+    """Task-priority reward for alternative patches, not an evidence confidence."""
+    selected=np.array([name in requested for name in regions],bool)
+    if not selected.any():return 0.,False
+    position=np.exp(-np.asarray(errors)[selected]/.05)
+    support=np.clip(np.asarray(normal_forces)[selected],0.,1.)
+    return float(np.max(position*(.25+.75*support))),True
+
+
 class ContactTrackingEnv(gym.Env):
     metadata={'render_modes':[]}
 
     def __init__(self,reference,physics_scene,reward_mode='whole_body',horizon_s=2.,random_start=True,
                  randomize=False,action_mode='joint_offset',teacher_checkpoint=None,teacher_residual_scale=1.,
                  contact_reward='additive',policy_control='residual',pd_gain_source='local',
-                 focus_start_range=None,focus_probability=0.):
+                 focus_start_range=None,focus_probability=0.,contact_group=(),contact_group_weight=0.):
         if reward_mode not in ('whole_body','hands_only'):raise ValueError('Unknown reward variant')
         if contact_reward not in ('additive','coupled'):raise ValueError('Unknown contact reward recipe')
         self.contact_reward=contact_reward
@@ -49,6 +58,10 @@ class ContactTrackingEnv(gym.Env):
         self.policy_control=policy_control
         if pd_gain_source not in ('local','checkpoint'):raise ValueError('Unknown PD gain source')
         self.pd_gain_source=pd_gain_source
+        self.contact_group=tuple(sorted(set(contact_group)));self.contact_group_weight=float(contact_group_weight)
+        if any(name not in REGIONS for name in self.contact_group):raise ValueError('Unknown emphasized contact region')
+        if not np.isfinite(self.contact_group_weight) or self.contact_group_weight<0:raise ValueError('Nonnegative finite group reward weight required')
+        if self.contact_group_weight and not self.contact_group:raise ValueError('Positive group weight requires named regions')
         self.reference=Path(reference);self.reward_mode=reward_mode;self.horizon_s=float(horizon_s)
         self.random_start=random_start;self.randomize=randomize
         self.model=m=mujoco.MjModel.from_xml_path(str(physics_scene));self.data=d=mujoco.MjData(m)
@@ -214,6 +227,8 @@ class ContactTrackingEnv(gym.Env):
         action_rate=float(np.mean((residual_units*(action-self.previous_action))**2))
         contact_bonus=(.15*contact_position+.1*contact_term if self.contact_reward=='additive'
                        else .25*contact_position+.5*contact_term)
+        group_reward,group_active=emphasized_contact_group(errors,normal_forces,[target['region'] for target in targets],self.contact_group)
+        contact_bonus+=self.contact_group_weight*group_reward
         reward=.25*posture+.2*root+.3*object_tracking+contact_bonus+.1
         reward-=.01*effort+.01*action_rate+.03*unwanted
         tilt=float(d.xmat[1].reshape(3,3)[2,2])
@@ -229,6 +244,7 @@ class ContactTrackingEnv(gym.Env):
         info=dict(root_error_m=root_error,object_error_m=object_error,contact_position_reward=contact_position,
             contact_force_fraction=contact_force,contact_error_mean_m=float(np.mean(errors)) if errors else 0.,
             contact_guidance_term=contact_term,
+            emphasized_contact_group_reward=group_reward,emphasized_contact_group_active=group_active,
             active_contact_targets=len(targets),unwanted_object_contact_bodies=int(unwanted),
             reference_time_s=float(self.start_time+self.elapsed),box_height_m=float(d.xpos[self.box,2]),
             physics_warning_count=warnings,

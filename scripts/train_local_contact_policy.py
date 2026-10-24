@@ -17,13 +17,14 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from prism_reconstruction.robot_physics import prepare_physics_scene
 
 
-def make_environment(reference,scene,mode,seed,action_mode,horizon,teacher,residual_scale,contact_reward,policy_control,pd_gain_source,focus_start_range,focus_probability):
+def make_environment(reference,scene,mode,seed,action_mode,horizon,teacher,residual_scale,contact_reward,policy_control,pd_gain_source,focus_start_range,focus_probability,contact_group,contact_group_weight):
     from prism_reconstruction.contact_tracking_env import ContactTrackingEnv
     from stable_baselines3.common.monitor import Monitor
     env=Monitor(ContactTrackingEnv(reference,scene,reward_mode=mode,horizon_s=horizon,random_start=True,
         action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale,
         contact_reward=contact_reward,policy_control=policy_control,pd_gain_source=pd_gain_source,
-        focus_start_range=focus_start_range,focus_probability=focus_probability))
+        focus_start_range=focus_start_range,focus_probability=focus_probability,
+        contact_group=contact_group,contact_group_weight=contact_group_weight))
     env.reset(seed=seed)
     return env
 
@@ -49,6 +50,8 @@ def main():
     parser.add_argument('--robot-urdf',type=Path,help='Optional pinned source for inertial groups and effort limits')
     parser.add_argument('--focus-start-range',nargs=2,type=float,metavar=('FIRST','LAST'))
     parser.add_argument('--focus-probability',type=float,default=0.)
+    parser.add_argument('--contact-group',nargs='+',default=[])
+    parser.add_argument('--contact-group-weight',type=float,default=0.)
     args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
     if args.steps<1 or args.envs<1:raise ValueError('Positive training budget and environment count required')
@@ -73,7 +76,7 @@ def main():
     if args.device.startswith('cuda') and not torch.cuda.is_available():raise RuntimeError('CUDA not visible')
     teacher=str(args.teacher_checkpoint.resolve()) if args.teacher_checkpoint else None
     gain_source=('checkpoint' if teacher else 'local') if args.pd_gain_source=='auto' else args.pd_gain_source
-    factories=[functools.partial(make_environment,str(args.reference.resolve()),str(scene.resolve()),args.reward_mode,args.seed+i,args.action_mode,args.horizon,teacher,args.teacher_residual_scale,args.contact_reward,args.policy_control,gain_source,args.focus_start_range,args.focus_probability)
+    factories=[functools.partial(make_environment,str(args.reference.resolve()),str(scene.resolve()),args.reward_mode,args.seed+i,args.action_mode,args.horizon,teacher,args.teacher_residual_scale,args.contact_reward,args.policy_control,gain_source,args.focus_start_range,args.focus_probability,args.contact_group,args.contact_group_weight)
                for i in range(args.envs)]
     vector=SubprocVecEnv(factories,start_method='forkserver')
     logger=configure(str(args.output),['stdout','csv'])
@@ -136,6 +139,9 @@ def main():
         algorithm='stable-baselines3 PPO 2.4.1',physics='MuJoCo 3.2.7, 500 Hz, control 50 Hz',
         training_resets='Mixture of uniform reference phase and optional specified focus interval; no rollout root/object assistance',
         focus_start_range_s=args.focus_start_range,focus_probability=args.focus_probability,
+        contact_group=args.contact_group,contact_group_weight=args.contact_group_weight,
+        contact_group_changed_on_resume=bool(args.resume and (sorted(source_meta.get('contact_group',[]))!=sorted(args.contact_group) or source_meta.get('contact_group_weight',0.)!=args.contact_group_weight)),
+        contact_group_interpretation='Explicit imitation task priority, not increased contact confidence. Active only when an existing source target belongs to the named alternative-region group.',
         object_mass_kg=1.,mass_measured=False,domain_randomization=False,
         limitations=['Single reconstructed video and an imperfect geometric reference.',
             'Training returns do not establish full-clip success or sim2real transfer.',

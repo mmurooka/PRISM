@@ -39,9 +39,12 @@ def main():
     contact_reward=training_metadata.get('contact_reward','additive') if args.checkpoint else 'additive'
     policy_control=training_metadata.get('policy_control','residual') if args.checkpoint else 'residual'
     gain_source=args.pd_gain_source or (training_metadata.get('pd_gain_source','local') if args.checkpoint else ('checkpoint' if teacher else 'local'))
+    contact_group=training_metadata.get('contact_group',[]) if args.checkpoint else []
+    contact_group_weight=training_metadata.get('contact_group_weight',0.) if args.checkpoint else 0.
     env=ContactTrackingEnv(args.reference,args.physics_scene,horizon_s=args.horizon,random_start=False,
         action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale,
-        contact_reward=contact_reward,policy_control=policy_control,pd_gain_source=gain_source)
+        contact_reward=contact_reward,policy_control=policy_control,pd_gain_source=gain_source,
+        contact_group=contact_group,contact_group_weight=contact_group_weight)
     policy=None
     if args.checkpoint:
         from stable_baselines3 import PPO
@@ -79,6 +82,9 @@ def main():
                 force_and_gap_below_3cm_fraction=float(np.mean([m['region_object_contact_force_n'][region]>1.
                     and m['region_target_gap_m'][region]<.03 for m in selected])),
                 target_gap_median_m=float(np.median([m['region_target_gap_m'][region] for m in selected])))
+            successes=np.array([m['region_object_contact_force_n'].get(region,0.)>1. and m['region_target_gap_m'].get(region,float('inf'))<.03 for m in metrics])
+            changes=np.diff(np.r_[False,successes,False].astype(int));starts=np.flatnonzero(changes==1);ends=np.flatnonzero(changes==-1)
+            summary['regions'][region]['longest_force_and_gap_contact_s']=float(max(ends-starts,default=0)*env.control_dt)
         metadata=dict(schema='g1_unassisted_physics_rollout_v1',source_video_sha256=env.meta['source_video_sha256'],
             reference=str(args.reference.resolve()),source_trajectory_sha256=hashlib.sha256((args.reference/'trajectory.npz').read_bytes()).hexdigest(),
             training_reference=training_metadata.get('reference') if args.checkpoint else None,
@@ -88,6 +94,7 @@ def main():
             teacher_residual_scale=residual_scale,
             contact_reward=contact_reward,
             policy_control=policy_control,
+            contact_group=contact_group,contact_group_weight=contact_group_weight,
             pd_gain_source=gain_source,pd_gains={key:env.motor[key].tolist() for key in ('kp','kd')},
             physics_xml_sha256=hashlib.sha256(args.physics_scene.read_bytes()).hexdigest(),
             physics_profile=json.loads(args.physics_scene.with_suffix('.profile.json').read_text()) if args.physics_scene.with_suffix('.profile.json').exists() else None,

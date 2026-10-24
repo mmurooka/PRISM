@@ -364,3 +364,15 @@ iterations and solve time, and has a 100-iteration budget. Small-problem agreeme
 with the original iterative LSMR formulation is tested. The initial full-clip
 LSMR runs were stopped after exceeding 11 minutes; their interruption logs remain
 local. A faster solver does not strengthen contact identifiability.
+
+`--contact-group right_knee right_thigh --contact-group-weight 2` is an explicit
+imitation-task prior motivated by the user's statement that the leg touches the
+box. It does not raise the confidence of inferred contacts or add frame labels.
+When an existing target in that group is active, the best alternative patch earns
+`exp(-gap/0.05) * (0.25 + 0.75 * clip(normal_force/1 N,0,1))`.
+The two adjacent anatomical regions are alternatives, not simultaneous mandatory
+contacts. Hand contact cannot substitute for this term. Other contact terms and
+all physics/observations stay unchanged. Compare this task-conditioned variant
+with the same initialization, sampling and budget; do not report it as an
+unsupervised recognition improvement. Evaluations also record the longest
+continuous interval with force >1 N and target gap <3 cm for each region.
