@@ -158,3 +158,32 @@ transferred from the SMPL template instead of mapping every thigh patch to the k
 explicit friction/smoothing grid. Its selection fractions measure stability over
 those assumptions, not calibrated contact probabilities. It does not account for
 all shape, inertia or camera uncertainty.
+
+The optional shape-mismatch relaxation preserves the cuboid face and allows a
+reported tangential contact-point shift of at most 10 cm. Normal error is penalized
+fully; tangential error is weaker inside that radius and strengthens outside it.
+Outputs retain `point_object_original`, the relocated `point_object`, normal error,
+and relocation magnitude. Reported contact distance is to the relocated target,
+and must not be described as exact preservation of the human contact point.
+
+### Exploratory local physics / PPO
+
+`robot_physics.py` adds 29 bounded joint torque motors to the same geometry,
+with the pinned HoloSoma G1 armatures and PD gains. Both robot base and box remain
+free. No root assistance, object springs or weld constraints are used during a
+rollout. The 1 kg uniform box is an unmeasured simulation assumption. Near-neighbour
+collision exclusions match the documented IK baseline; this is not a certified
+model of the user's robot. A free-fall regression checks that the free object
+obeys gravity and has no actuator.
+
+`scripts/train_local_contact_policy.py` trains Stable-Baselines3 PPO in MuJoCo,
+using random reference-phase resets and short episodes. `whole_body` and
+`hands_only` variants have identical observations, dynamics and allowed contacts;
+only the intended-contact reward aggregation differs. Rewards include surface-point
+distance and measured simulator contact-force presence in the corresponding robot
+body, in addition to pose/object tracking. This is a privileged-state, single-video
+feasibility baseline, not the official PRISM teacher recipe or a vision policy.
+`scripts/evaluate_local_contact_policy.py` evaluates full remaining clips from
+fixed phases and saves actual simulated trajectories, failures and contact metrics.
+Training returns alone are not success rates. No output is authorized for direct
+robot execution by these scripts.

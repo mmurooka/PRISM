@@ -67,6 +67,19 @@ def distance_jacobian(model, data, first, second, maximum=.10):
     return float(distance), normal @ (j2 - j1)
 
 
+def relaxed_contact_error(difference,normal,maximum_slide=.10,tangent_weight=.2):
+    """Full normal accuracy, soft tangential relocation up to a stated radius."""
+    normal=np.asarray(normal,float);normal=normal/np.linalg.norm(normal)
+    projector=np.outer(normal,normal);tangent=(np.eye(3)-projector)@difference
+    length=np.linalg.norm(tangent)
+    scale=tangent_weight if length<=maximum_slide else 1-(1-tangent_weight)*maximum_slide/length
+    derivative=projector+scale*(np.eye(3)-projector)
+    if length>maximum_slide:
+        direction=tangent/length
+        derivative+=(1-tangent_weight)*maximum_slide/length*np.outer(direction,direction)
+    return projector@difference+scale*tangent,derivative
+
+
 class ContactIK:
     def __init__(self, scene_xml,contact_weight=120.):
         if not np.isfinite(contact_weight) or contact_weight<=0:raise ValueError('Positive contact weight required')
@@ -266,6 +279,12 @@ class ContactIK:
             self.foot_anchors[side]=dict(last_frame=frame,desired=desired)
             feet.append((side,body,local,desired))
         nominal = q.copy(); self.set_object(nominal,object_pose)
+        def contact_residual(target):
+            robot,jrobot=point_jacobian(m,d,target['robot_body_id'],np.asarray(target['robot_point_local']))
+            R=d.xmat[self.box_body].reshape(3,3);local=R.T@(robot-d.xpos[self.box_body])
+            _,jobject=point_jacobian(m,d,self.box_body,local)
+            error,derivative=relaxed_contact_error(local-target['point_object'],target['outward_normal_object'])
+            return error,derivative@R.T@(jrobot-jobject)
         def merit(candidate):
             d.qpos[:]=candidate;mujoco.mj_forward(m,d);value=0.
             for human,body in self.body_ids.items():
@@ -278,9 +297,8 @@ class ContactIK:
                 weights=np.ones(m.nv)*.7;weights[:3]=2;weights[self.box_vadr:self.box_vadr+3]=3
                 value+=np.sum((difference*weights)**2)
             for target in anchors:
-                robot,_=point_jacobian(m,d,target['robot_body_id'],np.asarray(target['robot_point_local']))
-                obj,_=point_jacobian(m,d,self.box_body,np.asarray(target['point_object']))
-                value+=self.contact_weight**2*target['weight']*np.sum((robot-obj)**2)
+                error,_=contact_residual(target)
+                value+=self.contact_weight**2*target['weight']*np.sum(error**2)
             for side,body,locals,desired in feet:
                 for local,point in zip(locals,desired):
                     actual,_=point_jacobian(m,d,body,local);value+=120**2*np.sum((actual-point)**2)
@@ -310,9 +328,8 @@ class ContactIK:
                 weights=np.ones(m.nv)*.7;weights[:3]=2;weights[self.box_vadr:self.box_vadr+3]=3
                 residual(np.diag(weights),-difference*weights,1.)
             for target in anchors:
-                point,jac=point_jacobian(m,d,target['robot_body_id'],np.asarray(target['robot_point_local']))
-                obj,jobj=point_jacobian(m,d,self.box_body,np.asarray(target['point_object']))
-                residual(jac-jobj,point-obj,self.contact_weight*np.sqrt(target['weight']))
+                error,jac=contact_residual(target)
+                residual(jac,error,self.contact_weight*np.sqrt(target['weight']))
             for side,body,locals,desired in feet:
                 for local,target in zip(locals,desired):
                     point,jac=point_jacobian(m,d,body,local)
@@ -362,7 +379,16 @@ class ContactIK:
         for target in anchors:
             p,_=point_jacobian(m,d,target['robot_body_id'],np.asarray(target['robot_point_local']))
             o,_=point_jacobian(m,d,self.box_body,np.asarray(target['point_object']))
-            target['position_error_m']=float(np.linalg.norm(p-o))
+            target['original_position_error_m']=float(np.linalg.norm(p-o))
+            original=np.asarray(target['point_object']);R=d.xmat[self.box_body].reshape(3,3)
+            local=R.T@(p-d.xpos[self.box_body]);normal=np.asarray(target['outward_normal_object']);normal/=np.linalg.norm(normal)
+            difference=local-original;tangent=difference-normal*(difference@normal)
+            shift=tangent*min(1.,.10/max(np.linalg.norm(tangent),1e-12))
+            relocated=np.clip(original+shift,-m.geom_size[self.box_geom],m.geom_size[self.box_geom])
+            target['point_object_original']=original.tolist();target['point_object']=relocated.tolist()
+            target['tangential_relaxation_m']=float(np.linalg.norm(relocated-original))
+            target['normal_error_m']=float(abs(difference@normal))
+            target['position_error_m']=float(np.linalg.norm(local-relocated))
         collisions=[]
         for first,second in self.pairs:
             distance,_=distance_jacobian(m,d,first,second,.02)

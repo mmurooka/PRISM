@@ -6,10 +6,18 @@ import mujoco
 import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
-from prism_reconstruction.contact_ik import point_jacobian,distance_jacobian
+from prism_reconstruction.contact_ik import point_jacobian,distance_jacobian,relaxed_contact_error
 
 
 class ContactIKTests(unittest.TestCase):
+    def test_tangential_relaxation_keeps_normal_error_and_correct_gradient(self):
+        for difference in (np.array([.03,.02,.01]),np.array([.15,.2,.04])):
+            error,jac=relaxed_contact_error(difference,np.array([0.,0.,1.]))
+            self.assertAlmostEqual(error[2],difference[2])
+            for i in range(3):
+                shifted=difference.copy();shifted[i]+=1e-6
+                after,_=relaxed_contact_error(shifted,np.array([0.,0.,1.]))
+                np.testing.assert_allclose((after-error)/1e-6,jac[:,i],atol=3e-6)
     def test_point_jacobian_uses_quaternion_tangent_coordinates(self):
         model=mujoco.MjModel.from_xml_string('<mujoco><worldbody><body pos="0 0 1"><freejoint/><geom type="box" size=".2 .3 .4"/></body></worldbody></mujoco>')
         data=mujoco.MjData(model);mujoco.mj_forward(model,data)

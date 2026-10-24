@@ -123,6 +123,8 @@ def main():
     penetrations=[max([x['penetration_m'] for x in r['collision_violations']],default=0) for r in diagnostics]
     metadata=dict(schema='g1_whole_body_contact_ik_v1',policy=args.policy,body_scale=demonstration['body_scale'],
         contact_weight=args.contact_weight,iterations_per_frame=args.iterations,
+        object_contact_relaxation=dict(maximum_tangential_shift_m=.10,tangential_loss_weight=.2,
+            interpretation='Relocated points stay on the same cuboid face; original points and shifts are retained. Contact errors use the relocated targets.'),
         warm_start_trajectory_sha256=sha(args.warm_start/'trajectory.npz') if args.warm_start else None,
         source_video_sha256=str(human['source_video_sha256']),source_human_sha256=sha(args.human),source_object_sha256=sha(args.object),
         source_contacts_sha256=sha(args.contacts/'contacts.npz'),source_robot_xml_sha256=sha(args.robot_xml),
