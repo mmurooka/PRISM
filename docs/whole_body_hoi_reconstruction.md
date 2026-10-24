@@ -414,6 +414,16 @@ the recorded vectors balanced the box Newton equation within 3e-13 N; enabling
 recording left all five deterministic trajectories bitwise unchanged. This checks
 the simulated force sign and bookkeeping, not the accuracy of human force inference.
 
+`scripts/evaluate_contact_intervention.py` branches a deterministic rollout from
+the same state and disables only the selected articulated body's box collision.
+It verifies every collision-mask pair, retaining floor and other-body contacts,
+and records pre-intervention state equality. This is an artificial simulator
+counterfactual, not a human contact label. In the 200k residual-policy diagnostic,
+right-thigh contact supplied 1.69 N s upward impulse after the 0.08 s intervention
+point. Removing it changed box height by about 12 mm at 0.20 s, but only 5 mm at
+0.60 s as other contacts compensated. Load-bearing contact need not be necessary
+for a similar object motion; this does not establish full-motion success.
+
 `--temporal-force-solver clarabel_constrained` instead minimizes force variation
 and force magnitude subject to a per-frame normalized wrench residual cap of
 `max(0.08, independent_fit_residual)`. A `1e-6` numerical feasibility allowance is
