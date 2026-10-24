@@ -40,10 +40,12 @@ class ContactTrackingEnv(gym.Env):
 
     def __init__(self,reference,physics_scene,reward_mode='whole_body',horizon_s=2.,random_start=True,
                  randomize=False,action_mode='joint_offset',teacher_checkpoint=None,teacher_residual_scale=1.,
-                 contact_reward='additive'):
+                 contact_reward='additive',policy_control='residual'):
         if reward_mode not in ('whole_body','hands_only'):raise ValueError('Unknown reward variant')
         if contact_reward not in ('additive','coupled'):raise ValueError('Unknown contact reward recipe')
         self.contact_reward=contact_reward
+        if policy_control not in ('residual','teacher_absolute'):raise ValueError('Unknown policy control mode')
+        self.policy_control=policy_control
         self.reference=Path(reference);self.reward_mode=reward_mode;self.horizon_s=float(horizon_s)
         self.random_start=random_start;self.randomize=randomize
         self.model=m=mujoco.MjModel.from_xml_path(str(physics_scene));self.data=d=mujoco.MjData(m)
@@ -75,6 +77,10 @@ class ContactTrackingEnv(gym.Env):
         if teacher_checkpoint:
             from .released_teacher import ReleasedTeacher
             self.teacher=ReleasedTeacher(teacher_checkpoint,m,self.motor)
+        if policy_control=='teacher_absolute':
+            if self.teacher is None:raise ValueError('Absolute teacher coordinates require the released checkpoint contract')
+            if teacher_residual_scale!=1.:raise ValueError('Residual scaling does not apply to absolute teacher actions')
+            self.action_space=gym.spaces.Box(-self.teacher.clip,self.teacher.clip,(29,),np.float32)
         d.qpos[:]=self.qref[0];mujoco.mj_forward(m,d)
         observation=self._observation()
         self.observation_space=gym.spaces.Box(-100.,100.,observation.shape,np.float32)
@@ -119,6 +125,7 @@ class ContactTrackingEnv(gym.Env):
             (R.T@object_R)[:,:2].reshape(-1),slots.reshape(-1),future,self.stance[index].astype(float),
             [np.sin(2*np.pi*phase/self.times[-1]),np.cos(2*np.pi*phase/self.times[-1])]])
         if self.teacher is not None:obs=np.r_[obs,self.teacher.previous_action]
+        if self.policy_control=='teacher_absolute':obs=np.r_[self.teacher.observation(self),obs]
         return np.clip(obs,-100,100).astype(np.float32)
 
     def reset(self,*,seed=None,options=None):
@@ -140,9 +147,13 @@ class ContactTrackingEnv(gym.Env):
     def step(self,action):
         m,d=self.model,self.data;action=np.asarray(action,float)
         if action.shape!=(29,) or not np.isfinite(action).all():raise ValueError('Finite 29-joint action required')
-        action=np.clip(action,-1,1);q,_,_=self._reference(self.start_time+self.elapsed)
-        desired=(self.teacher.desired_positions(self,self.teacher_residual_scale*action) if self.teacher is not None
-                 else q[self.qadr]+self.action_scale*action)
+        action=np.clip(action,self.action_space.low,self.action_space.high);q,_,_=self._reference(self.start_time+self.elapsed)
+        if self.policy_control=='teacher_absolute':
+            self.teacher.previous_action=action.copy()
+            desired=self.teacher.default+self.teacher.action_scale*action
+        else:
+            desired=(self.teacher.desired_positions(self,self.teacher_residual_scale*action) if self.teacher is not None
+                     else q[self.qadr]+self.action_scale*action)
         for _ in range(self.substeps):
             torque=self.motor['kp']*(desired-d.qpos[self.qadr])-self.motor['kd']*d.qvel[self.vadr]
             d.ctrl[:]=np.clip(torque,self.motor['lower'],self.motor['upper'])
@@ -183,7 +194,7 @@ class ContactTrackingEnv(gym.Env):
             region_forces[name]=max(region_forces.get(name,0.),forces.get(int(m.body_weldid[target['robot_body_id']]),0.))
             region_gaps[name]=min(region_gaps.get(name,float('inf')),float(np.linalg.norm(robot_point-box_point)))
         effort=float(np.mean((d.ctrl/np.maximum(self.motor['upper'],1))**2))
-        residual_units=self.teacher_residual_scale if self.teacher is not None else 1.
+        residual_units=self.teacher_residual_scale if self.teacher is not None and self.policy_control=='residual' else 1.
         action_rate=float(np.mean((residual_units*(action-self.previous_action))**2))
         contact_bonus=(.15*contact_position+.1*contact_term if self.contact_reward=='additive'
                        else .25*contact_position+.5*contact_term)

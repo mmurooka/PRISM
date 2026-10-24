@@ -273,6 +273,21 @@ dependencies in a separate environment: changing the main MuJoCo version would
 invalidate the existing CPU physics comparisons. A faster physics-only number
 does not establish faster end-to-end training or equivalent contact dynamics.
 
+### Direct teacher fine-tuning
+
+`--policy-control teacher_absolute` initializes the PPO actor from the released
+178-input ELU network and makes that actor trainable. Its first 178 observations
+are the original teacher contract; the remaining 367 add contact, future-motion
+and tracking information. New first-layer columns start at zero, preserving the
+released deterministic actor before learning. `validate_teacher_finetune.py`
+checks real-checkpoint output parity and identical physical transitions for
+equivalent commands; tiny neural roundoff can still separate independent contact
+rollouts. The learned action directly specifies the original teacher's PD target
+coordinates, bounded by its action clip and the same physical motor limits.
+This differs from the default frozen teacher plus residual policy. Do not resume
+a checkpoint across these action/observation contracts. Training outputs retain
+source snapshots, initialization hashes and resumed-step counts.
+
 `scripts/audit_robot_contact_dynamics.py` computes required generalized forces
 from the reference accelerations, mass matrix, bias and passive forces. It fits
 these with 29 bounded motor torques and unilateral eight-ray friction pyramids
