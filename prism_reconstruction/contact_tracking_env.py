@@ -40,7 +40,8 @@ class ContactTrackingEnv(gym.Env):
 
     def __init__(self,reference,physics_scene,reward_mode='whole_body',horizon_s=2.,random_start=True,
                  randomize=False,action_mode='joint_offset',teacher_checkpoint=None,teacher_residual_scale=1.,
-                 contact_reward='additive',policy_control='residual',pd_gain_source='local'):
+                 contact_reward='additive',policy_control='residual',pd_gain_source='local',
+                 focus_start_range=None,focus_probability=0.):
         if reward_mode not in ('whole_body','hands_only'):raise ValueError('Unknown reward variant')
         if contact_reward not in ('additive','coupled'):raise ValueError('Unknown contact reward recipe')
         self.contact_reward=contact_reward
@@ -57,6 +58,12 @@ class ContactTrackingEnv(gym.Env):
         self.action_scale=np.full(29,.25) if action_mode=='joint_offset' else .25*self.motor['upper']/self.motor['kp']
         with np.load(self.reference/'trajectory.npz') as a:
             self.qref=a['qpos'].copy();self.times=a['timestamps_s'].copy();self.stance=a['stance'].copy()
+        self.focus_probability=float(focus_probability);self.focus_start_range=focus_start_range
+        if not np.isfinite(self.focus_probability) or not 0<=self.focus_probability<=1:raise ValueError('Focus probability must be in [0,1]')
+        if focus_start_range is not None:
+            if len(focus_start_range)!=2 or not self.times[0]<=focus_start_range[0]<focus_start_range[1]<=self.times[-1]-.25:
+                raise ValueError('Focus start range must lie within valid reference reset times')
+        elif self.focus_probability:raise ValueError('Positive focus probability requires a start range')
         if self.qref.shape!=(len(self.times),m.nq):raise ValueError('Reference/model configuration mismatch')
         self.records=json.loads((self.reference/'diagnostics.json').read_text())
         self.meta=json.loads((self.reference/'metadata.json').read_text())
@@ -136,7 +143,11 @@ class ContactTrackingEnv(gym.Env):
     def reset(self,*,seed=None,options=None):
         super().reset(seed=seed);options=options or {};m,d=self.model,self.data
         upper=max(self.times[0],self.times[-1]-.25)
-        self.start_time=float(options.get('start_time',self.np_random.uniform(self.times[0],upper) if self.random_start else self.times[0]))
+        if 'start_time' in options:sampled=options['start_time']
+        elif not self.random_start:sampled=self.times[0]
+        elif self.focus_probability>0 and self.np_random.random()<self.focus_probability:sampled=self.np_random.uniform(*self.focus_start_range)
+        else:sampled=self.np_random.uniform(self.times[0],upper)
+        self.start_time=float(sampled)
         if not self.times[0]<=self.start_time<self.times[-1]:raise ValueError('Reset phase outside reference')
         self.elapsed=0.;self.previous_action=np.zeros(29)
         if self.teacher is not None:self.teacher.reset()

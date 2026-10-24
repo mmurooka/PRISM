@@ -333,3 +333,9 @@ keeps the raw VLM/dynamics labels unchanged. These are image-supported candidate
 not contact ground truth: occlusion can also make pelvis/torso boundaries appear
 adjacent to the box. The current implementation has no human self-occlusion depth
 test, so these cues must not automatically become hard contact constraints.
+
+An optional reset curriculum (`--focus-start-range FIRST LAST
+--focus-probability P`) mixes focused phase resets with uniform full-clip resets.
+It changes training-state sampling only; fixed evaluation starts and unassisted
+rollout dynamics are unchanged. Record this mixture when comparing learning
+runs. A focused training interval is not a contact ground-truth annotation.
