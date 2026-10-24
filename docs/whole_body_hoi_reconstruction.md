@@ -91,6 +91,12 @@ identifiable, but their combined support may still be necessary. Archives retain
 both individual and group-level tests; group necessity must not be reported as an
 exact knee contact label. All necessity flags are false when the full fit is
 infeasible.
+`contact_evidence_code` retains separate per-vertex bits for visual/geometric
+support, a positive force in one feasible explanation, individual-region
+necessity and group necessity. `contact_candidates` is their union, not a binary
+ground-truth mask. In particular, a dynamics-only candidate does not become a
+positive InteractVLM prediction, and one selected force allocation does not
+uniquely identify a contact point.
 Unseen box faces, occluded body parts, camera motion, metric scale and numerical
 accelerations can substantially alter the answer. Edge/corner normals are represented
 by one deterministic adjacent face. Region surface points on each face are collapsed

@@ -63,6 +63,7 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
     necessary = np.zeros((len(times), len(names)), bool)
     possible = np.zeros_like(necessary)
     group_necessary = np.zeros((len(times),len(SUPPORT_GROUPS)),bool)
+    evidence_code = contact['active'].astype(np.uint8)
     residual = np.empty(len(times))
     hand_only_residual = np.empty(len(times))
     records = []
@@ -90,6 +91,12 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
             if candidate.source == 'human' and len(ids):
                 possible[t, ids[0]] |= selected
                 necessary[t, ids[0]] |= bool(fit['necessary'][k])
+                if selected:
+                    evidence_code[t,patch] |= 2
+                    if fit['necessary'][k]:evidence_code[t,patch] |= 4
+                    if any(fit['necessary_groups'][name] and candidate.region in members
+                           for name,members in SUPPORT_GROUPS.items()):
+                        evidence_code[t,patch] |= 8
             details.append(dict(region=candidate.region, source=candidate.source,
                                 vertex_ids=patch.tolist(), visual_prior=candidate.prior,
                                 point_object=((candidate.point_world-pose[:3,3]) @ pose[:3,:3]).tolist(),
@@ -114,12 +121,16 @@ def reconstruct_contacts(data, config=ContactConfig(), friction=.6, mass_kg=None
                     interpretation='Explanatory forces and model-conditional necessity, not measured forces or uniquely identified contacts.',
                     support_groups=SUPPORT_GROUPS,
                     group_interpretation='Group necessity means at least one member must contribute under the model; it does not localize contact within that group.',
+                    evidence_code_bits={'1':'visual_and_geometric_contact','2':'positive_force_in_one_feasible_explanation',
+                        '4':'selected_force_in_individually_necessary_region','8':'selected_force_in_necessary_region_group'},
+                    candidate_interpretation='Union of visual/geometric contacts and one force explanation. Flags 2/4/8 are model-conditional evidence, not independent contact labels; flag 8 does not uniquely identify a group member or surface point.',
                     intervals=contact.pop('intervals'))
     metadata.update({k:str(np.asarray(data[k]).item()) for k in ('world_frame','scale_source','source_video_sha256','object_id')})
     metadata['contact_prior_source']=str(np.asarray(data.get('contact_prior_source','provided_unspecified')).item())
     arrays = dict(**contact, **motion, timestamps_s=times, world_from_object=poses, box_half_extents=half,
                   human_vertex_regions=regions, dynamics_possible=possible, dynamics_necessary=necessary,
                   dynamics_group_names=np.asarray(list(SUPPORT_GROUPS)),dynamics_group_necessary=group_necessary,
+                  contact_evidence_code=evidence_code,contact_candidates=evidence_code>0,
                   normalized_wrench_residual=residual, hand_only_wrench_residual=hand_only_residual)
     if not np.isfinite(temporal_force_smoothness) or temporal_force_smoothness<0:
         raise ValueError('Temporal force smoothness must be finite and nonnegative')

@@ -12,7 +12,7 @@ from prism_reconstruction.geometry import box_surface, smpl_vertex_regions
 from prism_reconstruction.contacts import ContactConfig, infer_contacts
 from prism_reconstruction.dynamics import ForceCandidate, floor_candidates, required_wrench, solve_contact_forces
 from prism_reconstruction.tracking import rigid_transform, track_rigid_object, estimate_box_geometry
-from prism_reconstruction.pipeline import run_archive
+from prism_reconstruction.pipeline import run_archive, reconstruct_contacts
 
 
 class WholeBodyContactTests(unittest.TestCase):
@@ -159,6 +159,20 @@ class RigidTrackingTests(unittest.TestCase):
 
 
 class ReconstructionArchiveTests(unittest.TestCase):
+    def test_dynamics_candidate_preserves_missing_visual_evidence(self):
+        times=np.arange(6)/30
+        vertices=np.tile([[-.3,-.2,-.5],[.3,-.2,-.5],[0,.3,-.5]],(6,1,1))
+        data=dict(timestamps_s=times,human_vertices_world=vertices,world_from_object=np.tile(np.eye(4),(6,1,1)),
+                  box_half_extents=[.5]*3,human_vertex_regions=['left_hand','right_hand','right_knee'],
+                  contact_scores=np.tile([1.,1.,0.],(6,1)),gravity_world=[0,0,-9.81],length_unit='m',
+                  world_frame='synthetic_world',scale_source='synthetic_known',source_video_sha256='0'*64,object_id='box')
+        arrays,metadata,records=reconstruct_contacts(data,config=ContactConfig(min_region_vertices=1))
+        self.assertFalse(arrays['active'][:,2].any())
+        self.assertTrue(arrays['contact_candidates'][:,2].all())
+        self.assertTrue(((arrays['contact_evidence_code'][:,2]&1)==0).all())
+        self.assertTrue(((arrays['contact_evidence_code'][:,2]&4)>0).all())
+        self.assertIn('not independent contact labels',metadata['candidate_interpretation'])
+
     def test_complete_archive_and_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
