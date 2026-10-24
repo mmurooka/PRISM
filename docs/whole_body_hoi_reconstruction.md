@@ -169,7 +169,7 @@ and must not be described as exact preservation of the human contact point.
 ### Exploratory local physics / PPO
 
 `robot_physics.py` adds 29 bounded joint torque motors to the same geometry,
-with the pinned HoloSoma G1 armatures and PD gains. Both robot base and box remain
+with the pinned HoloSoma G1 armatures and historical local PD gains. Both robot base and box remain
 free. No root assistance, object springs or weld constraints are used during a
 rollout. The 1 kg uniform box is an unmeasured simulation assumption. Near-neighbour
 collision exclusions match the documented IK baseline; this is not a certified
@@ -287,6 +287,16 @@ coordinates, bounded by its action clip and the same physical motor limits.
 This differs from the default frozen teacher plus residual policy. Do not resume
 a checkpoint across these action/observation contracts. Training outputs retain
 source snapshots, initialization hashes and resumed-step counts.
+
+**PD compatibility correction:** the historical local baseline used damping
+ratio 1, while the released teacher's saved D gains are twice those values.
+Observation/actor parity did not test this controller mismatch. New teacher-based
+training therefore defaults to the exact checkpoint P and D gains. Old checkpoints
+without `pd_gain_source` retain `local` during evaluation so historical results
+remain reproducible; explicit `--pd-gain-source checkpoint` evaluates controller
+transfer. Actual gain arrays and controller changes on resume are recorded.
+The conservative physical effort caps remain those of the IK model and are not
+silently replaced by the teacher's larger hip-roll limits.
 
 `scripts/audit_robot_contact_dynamics.py` computes required generalized forces
 from the reference accelerations, mass matrix, bias and passive forces. It fits

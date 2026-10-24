@@ -17,12 +17,12 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from prism_reconstruction.robot_physics import prepare_physics_scene
 
 
-def make_environment(reference,scene,mode,seed,action_mode,horizon,teacher,residual_scale,contact_reward,policy_control):
+def make_environment(reference,scene,mode,seed,action_mode,horizon,teacher,residual_scale,contact_reward,policy_control,pd_gain_source):
     from prism_reconstruction.contact_tracking_env import ContactTrackingEnv
     from stable_baselines3.common.monitor import Monitor
     env=Monitor(ContactTrackingEnv(reference,scene,reward_mode=mode,horizon_s=horizon,random_start=True,
         action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale,
-        contact_reward=contact_reward,policy_control=policy_control))
+        contact_reward=contact_reward,policy_control=policy_control,pd_gain_source=pd_gain_source))
     env.reset(seed=seed)
     return env
 
@@ -44,6 +44,7 @@ def main():
     parser.add_argument('--teacher-residual-scale',type=float,default=1.)
     parser.add_argument('--contact-reward',choices=('additive','coupled'),default='coupled')
     parser.add_argument('--policy-control',choices=('residual','teacher_absolute'),default='residual')
+    parser.add_argument('--pd-gain-source',choices=('auto','local','checkpoint'),default='auto')
     args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
     if args.steps<1 or args.envs<1:raise ValueError('Positive training budget and environment count required')
@@ -67,7 +68,8 @@ def main():
     torch.set_num_threads(1)
     if args.device.startswith('cuda') and not torch.cuda.is_available():raise RuntimeError('CUDA not visible')
     teacher=str(args.teacher_checkpoint.resolve()) if args.teacher_checkpoint else None
-    factories=[functools.partial(make_environment,str(args.reference.resolve()),str(scene.resolve()),args.reward_mode,args.seed+i,args.action_mode,args.horizon,teacher,args.teacher_residual_scale,args.contact_reward,args.policy_control)
+    gain_source=('checkpoint' if teacher else 'local') if args.pd_gain_source=='auto' else args.pd_gain_source
+    factories=[functools.partial(make_environment,str(args.reference.resolve()),str(scene.resolve()),args.reward_mode,args.seed+i,args.action_mode,args.horizon,teacher,args.teacher_residual_scale,args.contact_reward,args.policy_control,gain_source)
                for i in range(args.envs)]
     vector=SubprocVecEnv(factories,start_method='forkserver')
     logger=configure(str(args.output),['stdout','csv'])
@@ -100,6 +102,7 @@ def main():
         released=ReleasedTeacher(args.teacher_checkpoint,model,motor_parameters(model))
         initialize_actor_from_teacher(policy.policy,released.actor)
     policy.set_logger(logger)
+    applied_motor=vector.get_attr('motor',indices=[0])[0]
     metadata=dict(schema='local_exploratory_contact_ppo_v1',reference=str(args.reference.resolve()),
         source_trajectory_sha256=hashlib.sha256((args.reference/'trajectory.npz').read_bytes()).hexdigest(),
         env_code_sha256=hashlib.sha256((Path(__file__).resolve().parents[1]/'prism_reconstruction/contact_tracking_env.py').read_bytes()).hexdigest(),
@@ -109,6 +112,8 @@ def main():
         teacher_residual_scale=args.teacher_residual_scale,
         contact_reward=args.contact_reward,
         policy_control=args.policy_control,
+        pd_gain_source=gain_source,pd_gains={key:applied_motor[key].tolist() for key in ('kp','kd')},
+        controller_changed_on_resume=bool(args.resume and source_meta.get('pd_gain_source','local')!=gain_source),
         contact_reward_description=('Per-joint mean exponential tracking; linear-distance root/object shaping; '
             '0.25 approach + 0.5 position-times-normal-force contact guidance.' if args.contact_reward=='coupled'
             else 'Legacy narrow squared-error tracking with independent position and force-presence bonuses.'),

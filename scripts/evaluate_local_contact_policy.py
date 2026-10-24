@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--checkpoint',type=Path)
     parser.add_argument('--teacher-checkpoint',type=Path)
     parser.add_argument('--teacher-residual-scale',type=float,default=1.)
+    parser.add_argument('--pd-gain-source',choices=('local','checkpoint'))
     parser.add_argument('--start-times',type=float,nargs='+',default=[0.,2.,4.,4.79,8.])
     parser.add_argument('--horizon',type=float,default=12.)
     parser.add_argument('--seed',type=int,default=0)
@@ -37,9 +38,10 @@ def main():
     residual_scale=training_metadata.get('teacher_residual_scale',1.) if args.checkpoint else args.teacher_residual_scale
     contact_reward=training_metadata.get('contact_reward','additive') if args.checkpoint else 'additive'
     policy_control=training_metadata.get('policy_control','residual') if args.checkpoint else 'residual'
+    gain_source=args.pd_gain_source or (training_metadata.get('pd_gain_source','local') if args.checkpoint else ('checkpoint' if teacher else 'local'))
     env=ContactTrackingEnv(args.reference,args.physics_scene,horizon_s=args.horizon,random_start=False,
         action_mode=action_mode,teacher_checkpoint=teacher,teacher_residual_scale=residual_scale,
-        contact_reward=contact_reward,policy_control=policy_control)
+        contact_reward=contact_reward,policy_control=policy_control,pd_gain_source=gain_source)
     policy=None
     if args.checkpoint:
         from stable_baselines3 import PPO
@@ -83,6 +85,7 @@ def main():
             teacher_residual_scale=residual_scale,
             contact_reward=contact_reward,
             policy_control=policy_control,
+            pd_gain_source=gain_source,pd_gains={key:env.motor[key].tolist() for key in ('kp','kd')},
             teacher_checkpoint_sha256=env.teacher.sha256 if env.teacher is not None else None,
             evaluation_code_sha256={path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in
                 (Path(__file__),Path(__file__).resolve().parents[1]/'prism_reconstruction/contact_tracking_env.py')},

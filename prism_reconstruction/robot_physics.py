@@ -6,8 +6,11 @@ import mujoco
 import numpy as np
 
 
-# Pinned HoloSoma G1 motor armatures; kp=(2*pi*10)^2*armature and
-# kd=2*(2*pi*10)*armature. Keep conservative effort limits from the IK model.
+# Pinned HoloSoma G1 motor armatures. The historical local baseline uses
+# kp=(2*pi*10)^2*armature, kd=2*(2*pi*10)*armature (damping ratio 1).
+# Released PRISM teacher checkpoints use twice this kd; teacher-based runs
+# should select their saved gains explicitly via pd_gain_source='checkpoint'.
+# Keep conservative effort limits from the IK model.
 ARMATURE = dict(hip_pitch=.01017752004,hip_roll=.025101925,hip_yaw=.01017752004,
     knee=.025101925,ankle_pitch=.00721945,ankle_roll=.00721945,
     waist_yaw=.01017752004,waist_roll=.00721945,waist_pitch=.00721945,

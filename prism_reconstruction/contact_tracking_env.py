@@ -40,12 +40,14 @@ class ContactTrackingEnv(gym.Env):
 
     def __init__(self,reference,physics_scene,reward_mode='whole_body',horizon_s=2.,random_start=True,
                  randomize=False,action_mode='joint_offset',teacher_checkpoint=None,teacher_residual_scale=1.,
-                 contact_reward='additive',policy_control='residual'):
+                 contact_reward='additive',policy_control='residual',pd_gain_source='local'):
         if reward_mode not in ('whole_body','hands_only'):raise ValueError('Unknown reward variant')
         if contact_reward not in ('additive','coupled'):raise ValueError('Unknown contact reward recipe')
         self.contact_reward=contact_reward
         if policy_control not in ('residual','teacher_absolute'):raise ValueError('Unknown policy control mode')
         self.policy_control=policy_control
+        if pd_gain_source not in ('local','checkpoint'):raise ValueError('Unknown PD gain source')
+        self.pd_gain_source=pd_gain_source
         self.reference=Path(reference);self.reward_mode=reward_mode;self.horizon_s=float(horizon_s)
         self.random_start=random_start;self.randomize=randomize
         self.model=m=mujoco.MjModel.from_xml_path(str(physics_scene));self.data=d=mujoco.MjData(m)
@@ -77,6 +79,9 @@ class ContactTrackingEnv(gym.Env):
         if teacher_checkpoint:
             from .released_teacher import ReleasedTeacher
             self.teacher=ReleasedTeacher(teacher_checkpoint,m,self.motor)
+        if pd_gain_source=='checkpoint':
+            if self.teacher is None:raise ValueError('Checkpoint PD gains require a teacher checkpoint')
+            self.motor['kp']=self.teacher.kp.copy();self.motor['kd']=self.teacher.kd.copy()
         if policy_control=='teacher_absolute':
             if self.teacher is None:raise ValueError('Absolute teacher coordinates require the released checkpoint contract')
             if teacher_residual_scale!=1.:raise ValueError('Residual scaling does not apply to absolute teacher actions')

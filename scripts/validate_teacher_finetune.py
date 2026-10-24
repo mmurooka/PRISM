@@ -18,12 +18,14 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('reference','physics-scene','checkpoint','output'):parser.add_argument('--'+name,type=Path,required=True)
     args=parser.parse_args();torch.set_num_threads(1)
-    kwargs=dict(teacher_checkpoint=args.checkpoint,contact_reward='coupled')
+    kwargs=dict(teacher_checkpoint=args.checkpoint,contact_reward='coupled',pd_gain_source='checkpoint')
     env=ContactTrackingEnv(args.reference,args.physics_scene,policy_control='teacher_absolute',**kwargs)
     base=ContactTrackingEnv(args.reference,args.physics_scene,**kwargs)
     policy=PPO('MlpPolicy',env,n_steps=16,batch_size=16,device='cpu',policy_kwargs=dict(
         net_arch=dict(pi=[512,256,128],vf=[512,256,128]),activation_fn=torch.nn.ELU,log_std_init=-1.))
     initialize_actor_from_teacher(policy.policy,env.teacher.actor);rng=np.random.default_rng(2);errors=[]
+    np.testing.assert_array_equal(env.motor['kp'],env.teacher.kp)
+    np.testing.assert_array_equal(env.motor['kd'],env.teacher.kd)
     for phase in np.linspace(0,env.times[-1]-.01,100):
         env.reset(options={'start_time':float(phase)});env.data.qpos[env.qadr]+=rng.normal(0,.01,29)
         mujoco.mj_forward(env.model,env.data);observation=env._observation()
@@ -45,6 +47,8 @@ def main():
     if max(state_errors)>1e-10:raise AssertionError('Equivalent commands changed physical transitions')
     check_env(env,skip_render_check=True)
     result=dict(teacher_checkpoint_sha256=env.teacher.sha256,sample_states=100,
+        pd_gain_source=env.pd_gain_source,checkpoint_pd_gains_match=True,
+        pd_gains={key:env.motor[key].tolist() for key in ('kp','kd')},
         observation_dimensions=env.observation_space.shape[0],maximum_action_difference=max(errors),
         equivalent_command_steps=steps,maximum_qpos_difference_with_identical_commands=max(state_errors),gym_checks_passed=True,
         interpretation='Actor initialization and identical-command physics parity only. Independent closed-loop trajectories can diverge from floating-point contact sensitivity.')
