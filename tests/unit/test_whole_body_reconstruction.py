@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 import unittest
+import tempfile
+import json
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import numpy as np
@@ -10,6 +12,7 @@ from prism_reconstruction.geometry import box_surface, smpl_vertex_regions
 from prism_reconstruction.contacts import ContactConfig, infer_contacts
 from prism_reconstruction.dynamics import ForceCandidate, floor_candidates, required_wrench, solve_contact_forces
 from prism_reconstruction.tracking import rigid_transform, track_rigid_object, estimate_box_geometry
+from prism_reconstruction.pipeline import run_archive
 
 
 class WholeBodyContactTests(unittest.TestCase):
@@ -139,6 +142,35 @@ class RigidTrackingTests(unittest.TestCase):
         points = np.array(list(product([-1,0,1], repeat=3))) * [.5,.3,.2]
         result = estimate_box_geometry(np.eye(4)[None], points[None])
         np.testing.assert_allclose(np.sort(result['half_extents']), [.2,.3,.5], atol=1e-8)
+
+
+class ReconstructionArchiveTests(unittest.TestCase):
+    def test_complete_archive_and_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            times = np.arange(6)/30
+            human = np.tile([[-.3,-.2,-.5], [.3,-.2,-.5], [0,.3,-.5]], (6,1,1))
+            source = directory/'input.npz'
+            np.savez(source, timestamps_s=times, human_vertices_world=human,
+                     world_from_object=np.tile(np.eye(4),(6,1,1)), box_half_extents=[.5]*3,
+                     human_vertex_regions=['left_hand','right_hand','left_knee'],
+                     contact_scores=np.ones((6,3)), gravity_world=[0,0,-9.81],
+                     length_unit='m', world_frame='synthetic_world', scale_source='synthetic_known',
+                     source_video_sha256='0'*64, object_id='box')
+            output = directory/'output'
+            metadata = run_archive(source, output, config=ContactConfig(min_region_vertices=1))
+            self.assertEqual(metadata['force_unit'], 'N_per_kg')
+            self.assertEqual(metadata['scene_support'], 'not_provided')
+            self.assertEqual(len(metadata['input_sha256']), 64)
+            with np.load(output/'contacts.npz', allow_pickle=False) as archive:
+                self.assertTrue(archive['active'].all())
+                self.assertIn('left_knee', archive['region_names'])
+                self.assertTrue(np.all(archive['normalized_wrench_residual'] < .08))
+            evidence = json.loads((output/'force_evidence.json').read_text())
+            self.assertEqual(len(evidence), 6)
+            self.assertGreater(evidence[0]['hand_only_residual'], evidence[0]['normalized_residual'])
+            with self.assertRaises(FileExistsError):
+                run_archive(source, output)
 
 
 if __name__ == '__main__':
