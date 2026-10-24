@@ -1,5 +1,6 @@
 """Join independently produced geometry only after frame/provenance checks."""
 from pathlib import Path
+import json
 import numpy as np
 from .geometry import smpl_vertex_regions, validate_poses
 from .contacts import validate_times
@@ -44,7 +45,7 @@ def assemble_input(human, objects, contact_scores, gravity_world):
     return result
 
 
-def load_interactvlm_contacts(folder, frame_indices, vertices=6890):
+def load_interactvlm_contacts(folder, frame_indices, vertices=6890, source_video_sha256=None):
     """Use original frame indices; missing results must not be shifted or zero-filled."""
     scores=[]
     for frame in frame_indices:
@@ -52,6 +53,10 @@ def load_interactvlm_contacts(folder, frame_indices, vertices=6890):
         # The CRISP worker uses source JPEG stems, not positions in a subsample.
         if not path.is_file():
             raise FileNotFoundError(f'Missing contact result for source frame {frame}: {path}')
+        if source_video_sha256 is not None:
+            sidecar=path.with_suffix('.json')
+            if not sidecar.is_file() or json.loads(sidecar.read_text()).get('provenance',{}).get('source_video_sha256')!=source_video_sha256:
+                raise ValueError(f'Contact/video provenance mismatch: {path}')
         with np.load(path,allow_pickle=False) as data:
             value=np.asarray(data['pred_contact_3d_smplh']).reshape(-1)
         if value.shape!=(vertices,) or not np.isfinite(value).all() or np.any((value<0)|(value>1)):

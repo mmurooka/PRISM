@@ -19,7 +19,8 @@ def main():
     args=parser.parse_args()
     if args.output.exists(): raise FileExistsError(args.output)
     with np.load(args.human,allow_pickle=False) as h, np.load(args.object,allow_pickle=False) as o:
-        scores=load_interactvlm_contacts(args.contacts,h['frame_indices'])
+        scores=load_interactvlm_contacts(args.contacts,h['frame_indices'],
+            source_video_sha256=str(h['source_video_sha256'].item()))
         data=assemble_input(h,o,scores,args.gravity_world)
     args.output.parent.mkdir(parents=True,exist_ok=True)
     np.savez_compressed(args.output,**data)

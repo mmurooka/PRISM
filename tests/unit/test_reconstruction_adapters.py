@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import tempfile
+import json
 import unittest
 import numpy as np
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
@@ -51,6 +52,19 @@ class AdapterTests(unittest.TestCase):
             h,o=self.fixture(); o[field]=value
             with self.subTest(field=field),self.assertRaises(ValueError):
                 assemble_input(h,o,np.zeros((3,6890)),[0,-9.81,0])
+
+    def test_contact_results_from_another_video_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder=Path(tmp)
+            np.savez(folder/'00000.npz',pred_contact_3d_smplh=np.zeros(6890))
+            with self.assertRaises(ValueError):
+                load_interactvlm_contacts(folder,[0],source_video_sha256='current-video')
+            metadata=folder/'00000.json'
+            metadata.write_text(json.dumps(dict(provenance=dict(source_video_sha256='old-video'))))
+            with self.assertRaises(ValueError):
+                load_interactvlm_contacts(folder,[0],source_video_sha256='current-video')
+            metadata.write_text(json.dumps(dict(provenance=dict(source_video_sha256='current-video'))))
+            self.assertEqual(load_interactvlm_contacts(folder,[0],source_video_sha256='current-video').shape,(1,6890))
 
 
 if __name__=='__main__': unittest.main()
