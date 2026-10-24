@@ -26,6 +26,16 @@ def wrench(points,forces):
     return forces.sum(-2),torch.cross(points,forces,dim=-1).sum(-2)
 
 
+def cuboid_edge_rays(points,half,coefficient,tolerance=.002):
+    """Adjacent-face cone proposal at a nonsmooth edge, not a measured normal."""
+    near=(points.abs()-half).abs()<=tolerance
+    if not torch.all(near.any(-1)):raise ValueError('Contact points must lie on a cuboid face')
+    signs=torch.where(points>=0,1.,-1.)
+    normals=-torch.eye(3,device=points.device,dtype=points.dtype)[None]*signs[:,:,None]
+    rays=friction_rays(normals,coefficient)*near[:,:,None,None]
+    return rays.flatten(1,2),near.sum(-1)
+
+
 def frame_sum(values,frames,count):
     return torch.zeros((count,*values.shape[1:]),device=values.device,dtype=values.dtype).index_add(0,frames,values)
 
@@ -37,16 +47,18 @@ def normalized_wrench_error(actual,required,weight,length=.3,center=None):
 
 
 class ContactWrenchProposal(torch.nn.Module):
-    def __init__(self,frames,count,object_normals,stance,on_floor,box_half,robot_mass,box_mass,device,dtype):
+    def __init__(self,frames,count,object_normals,stance,on_floor,box_half,robot_mass,box_mass,device,dtype,object_points=None):
         super().__init__()
         self.frames=frames;self.count=count;self.robot_weight=float(robot_mass)*9.81;self.box_weight=float(box_mass)*9.81
         self.object_rays=friction_rays(-object_normals,.6)
+        self.adjacent_faces=torch.ones(len(frames),device=device,dtype=torch.int64)
+        if object_points is not None:self.object_rays,self.adjacent_faces=cuboid_edge_rays(object_points,box_half,.6)
         normal=torch.tensor([0.,0.,1.],device=device,dtype=dtype)
         self.ground_rays=friction_rays(normal,.8)
         self.stance=stance[:,:,None,None].to(dtype)
         self.on_floor=on_floor[:,None,None].to(dtype)
         self.box_vertices=torch.cartesian_prod(*[torch.tensor([-1.,1.],device=device,dtype=dtype)]*3)*box_half
-        self.robot_object=torch.nn.Parameter(torch.zeros((len(frames),8),device=device,dtype=dtype))
+        self.robot_object=torch.nn.Parameter(torch.zeros(self.object_rays.shape[:2],device=device,dtype=dtype))
         active=stance.sum(1).clamp_min(1).to(dtype)
         initial=torch.ones((count,2,4,8),device=device,dtype=dtype)/(active[:,None,None,None]*32)
         self.feet=torch.nn.Parameter(initial)

@@ -37,9 +37,11 @@ def main():
     parser.add_argument('--hand-normal-weight',type=float,default=0.)
     parser.add_argument('--hand-closure-weight',type=float,default=0.)
     parser.add_argument('--contact-wrench-weight',type=float,default=0.)
+    parser.add_argument('--edge-contact-cones',action='store_true',help='Allow adjacent-face force cones at cuboid edges; still requires collision audit')
     args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
     if args.iterations<1:raise ValueError('Positive iteration count required')
+    if args.edge_contact_cones and args.contact_wrench_weight<=0:raise ValueError('Edge force cones require contact-wrench optimization')
     torch.set_num_threads(1);started=time.time();code_sha=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     dependency_sha={name:hashlib.sha256((Path(__file__).resolve().parents[1]/'prism_reconstruction'/name).read_bytes()).hexdigest()
         for name in ('torch_robot.py','contact_ik.py','torch_contact_forces.py')}
@@ -133,7 +135,8 @@ def main():
     robot_bodies=torch.arange(m.nbody,device=args.device)!=solver.box_body
     if args.contact_wrench_weight>0:
         proposal=ContactWrenchProposal(cf,count,object_normals,stance,on_floor,half,
-            float(m.body_mass.sum()-m.body_mass[solver.box_body]),float(m.body_mass[solver.box_body]),args.device,torch.float32)
+            float(m.body_mass.sum()-m.body_mass[solver.box_body]),float(m.body_mass[solver.box_body]),args.device,torch.float32,
+            object_points=co if args.edge_contact_cones else None)
         optimizer.add_param_group({'params':list(proposal.parameters()),'lr':.01})
         initial_rates.append(.01);optimization_parameters+=list(proposal.parameters())
     self_pairs=np.array([(a,b) for a,b in solver.pairs if a!=solver.floor_geom and b!=solver.floor_geom],int)
@@ -292,6 +295,8 @@ def main():
             hand_surface_closure='Optional cuboid SDF gap at nearest sampled hand surface; recomputed every gradient iteration.',
             hand_closure_weight=args.hand_closure_weight,
             contact_wrench_weight=args.contact_wrench_weight,
+            edge_contact_cones=args.edge_contact_cones,
+            edge_cone_interpretation='Optional sum of adjacent-face friction cones within 2 mm of a cuboid edge. A permissive normal-cone proposal; not an identified contact normal.',
             contact_wrench_assumptions='Optional projected nonnegative eight-ray forces, robot and box centroidal balance about their COMs, force-gap products. Object friction 0.6, floor 0.8. No joint-torque, no-slip or exact collision-manifold guarantee. Proposed forces are not measured.',
             collision_samples_per_body=96,collision_plane_refresh_iterations=50,
             collision_planes='Near robot/object and non-adjacent self-collision pairs from MuJoCo.'),
@@ -318,6 +323,7 @@ def main():
             _,parts=proposal(rp,op,box,Rbox,foot,required_robot,required_box,robot_com)
             np.savez_compressed(args.output/'proposed_contact_forces.npz',frame_indices=cf.cpu().numpy(),
                 robot_body_ids=cb.cpu().numpy(),robot_points=rp.cpu().numpy(),object_points=op.cpu().numpy(),
+                proposed_adjacent_faces=proposal.adjacent_faces.cpu().numpy(),
                 **{key:parts[key].cpu().numpy() for key in ('object_forces','foot_forces','box_ground_forces')})
             meta['global_refinement']['selected_proposed_wrench_balance']=float(parts['balance'])
             meta['global_refinement']['selected_proposed_force_gap']=float(parts['force_gap'])

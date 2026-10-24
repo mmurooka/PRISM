@@ -3,9 +3,17 @@ from pathlib import Path
 import unittest
 import torch
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
-from prism_reconstruction.torch_contact_forces import friction_rays,wrench,frame_sum,ContactWrenchProposal,normalized_wrench_error
+from prism_reconstruction.torch_contact_forces import friction_rays,wrench,frame_sum,ContactWrenchProposal,normalized_wrench_error,cuboid_edge_rays
 
 class ContactForceTests(unittest.TestCase):
+    def test_bottom_edge_can_propose_upward_support_without_side_pressure(self):
+        points=torch.tensor([[1.,-1.,0.],[1.,0.,0.]],dtype=torch.float64)
+        rays,count=cuboid_edge_rays(points,torch.ones(3,dtype=points.dtype),.6)
+        torch.testing.assert_close(count,torch.tensor([2,1]))
+        upward=rays[0,8:16].mean(0)
+        torch.testing.assert_close(upward,torch.tensor([0.,1.,0.],dtype=points.dtype),atol=1e-14,rtol=0)
+        self.assertEqual(float(rays[1,8:].abs().sum()),0.)
+
     def test_wrench_residual_is_invariant_to_world_origin(self):
         torch.manual_seed(19)
         actual=(torch.randn(5,3,dtype=torch.float64),torch.randn(5,3,dtype=torch.float64))

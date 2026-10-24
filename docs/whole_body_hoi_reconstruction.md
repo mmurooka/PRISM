@@ -348,3 +348,11 @@ scales with length squared. These selected perturbations do not cover parameter
 interactions or provide calibrated contact probabilities. Shifted COM tests use
 the nominal inertia about the shifted centre, rather than claiming a measured
 mass distribution. Contact metadata now records the supplied COM and inertia.
+
+`--edge-contact-cones` in global trajectory refinement permits forces from the
+sum of adjacent cuboid-face friction cones for targets within 2 mm of an edge.
+This matters for a box resting on the thigh near its bottom corner: assigning
+only the side-face normal can rule out direct upward support. The combined cone
+is deliberately permissive and does not infer the true surface normal. Always
+compare with the exact-collision inverse-force audit and physical rollouts. This
+option changes proposed robot forces only, not the human contact evidence.
